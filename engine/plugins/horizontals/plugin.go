@@ -394,6 +394,25 @@ func (h *horizPlugin) getOrganizationLocations(sess et.Session, o *dbt.Entity) (
 	return results, nil
 }
 
+// maxAnnouncedNetblocksForScope bounds the ASN netblock fan-out in
+// addASNetblocksToScope. An autonomous system that announces more than this
+// many netblocks is treated as shared infrastructure (a CDN, cloud or SaaS
+// provider such as Cloudflare, Google, AWS or Fastly) rather than a
+// target-owned ASN, and its announced space is not admitted to scope. A
+// target that runs its own ASN announces far fewer blocks than a provider,
+// so this cleanly separates the two; it is deliberately conservative because
+// admitting a provider's entire space and port-scanning it is far worse than
+// missing a few associative blocks, which still reach scope via the
+// ownership path. Tunable.
+const maxAnnouncedNetblocksForScope = 16
+
+// isSharedInfrastructureASN reports whether an autonomous system that
+// announces announcedNetblocks blocks should be treated as shared
+// infrastructure, whose announced space must not be admitted to scope.
+func isSharedInfrastructureASN(announcedNetblocks int) bool {
+	return announcedNetblocks > maxAnnouncedNetblocksForScope
+}
+
 func (h *horizPlugin) addASNetblocksToScope(sess et.Session, asn int) *dbt.Entity {
 	ctx, cancel := context.WithTimeout(sess.Ctx(), 10*time.Second)
 	defer cancel()
@@ -414,14 +433,35 @@ func (h *horizPlugin) addASNetblocksToScope(sess et.Session, asn int) *dbt.Entit
 	}
 
 	if edges, err := sess.DB().OutgoingEdges(ctx, as, since, "announces"); err == nil && len(edges) > 0 {
+		// Shared-infrastructure guard. This path is reached whenever a seed
+		// domain merely resolves onto a provider (e.g. a Cloudflare-fronted
+		// site), so admitting every block the ASN announces would put the
+		// provider's entire address space in scope and port-scan it. The
+		// per-netblock ambient gate in ip_netblock.go does not cover this ASN
+		// fan-out, so bound it here. Blocks the target genuinely owns still
+		// reach scope at any size via the ownership path
+		// (support.AdmitOwnedNetblock, gated on RDAP contact attribution).
+		if isSharedInfrastructureASN(len(edges)) {
+			sess.Log().Info("skipping ASN netblock admission: likely shared infrastructure",
+				"asn", asn, "announced_netblocks", len(edges),
+				slog.Group("plugin", "name", h.name))
+			return as
+		}
+
 		seconds := 5 * len(edges)
 
 		ctx, cancel := context.WithTimeout(sess.Ctx(), time.Duration(seconds)*time.Second)
 		defer cancel()
 
 		for _, edge := range edges {
-			if to, err := sess.DB().FindEntityById(ctx, edge.ToEntity.ID); err == nil && to != nil {
-				// add the announced netblock to the scope
+			to, err := sess.DB().FindEntityById(ctx, edge.ToEntity.ID)
+			if err != nil || to == nil {
+				continue
+			}
+			// Admit only small IPv4 blocks on this associative signal, as the
+			// ambient netblock path does; larger or genuinely-owned blocks
+			// come through the ownership path instead.
+			if nb, ok := to.Asset.(*oamnet.Netblock); ok && support.PrefixEligibleForAmbientAdmit(nb.CIDR) {
 				h.enqueueIfOutOfScope(sess, to)
 			}
 		}
