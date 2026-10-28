@@ -18,6 +18,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/owasp-amass/amass/v5/config"
 	"github.com/owasp-amass/amass/v5/engine"
+	"github.com/owasp-amass/amass/v5/engine/plugins/support"
 	"github.com/owasp-amass/amass/v5/internal/afmt"
 	"github.com/owasp-amass/amass/v5/internal/tools"
 )
@@ -98,6 +99,13 @@ func CLIWorkflow(cmdName string, clArgs []string) {
 		os.Exit(1)
 	}
 	defer e.Shutdown()
+
+	// Report the trusted-resolver configuration (built-in list vs. an
+	// AMASS_ENGINE_RESOLVERS override, any pool QPS cap, the wildcard resolver)
+	// so an operator can confirm an override took effect.
+	if info := support.ResolverStartupInfo(); info != "" {
+		l.Info(info)
+	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
