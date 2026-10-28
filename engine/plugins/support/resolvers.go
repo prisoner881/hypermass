@@ -7,7 +7,11 @@ package support
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +25,109 @@ import (
 	"github.com/owasp-amass/resolve/wildcards"
 	"golang.org/x/net/publicsuffix"
 )
+
+// Environment variables that let an operator replace the built-in trusted
+// resolver configuration at engine start-up. All are optional; when unset (or
+// invalid) the engine uses the built-in defaults, so existing deployments are
+// unchanged. See docs for the rationale (AWS VPC resolver, etc.).
+const (
+	// EnvResolvers is a comma-separated list of resolver IP addresses, or a
+	// path to a file with one IP address per line (blank lines and lines
+	// starting with '#' are ignored). When it yields at least one valid
+	// address, it replaces the built-in baseline list.
+	EnvResolvers = "AMASS_ENGINE_RESOLVERS"
+	// EnvResolverQPS is an aggregate queries-per-second cap applied across the
+	// whole trusted pool (the resolve library's pool-level limiter). 0 or unset
+	// means no pool-level cap. Use it to stay under a per-interface ceiling such
+	// as the AWS VPC resolver's link-local packet limit.
+	EnvResolverQPS = "AMASS_ENGINE_RESOLVER_QPS"
+	// EnvWildcardResolver is a single resolver IP used for wildcard detection.
+	// Unset means the built-in default. Point it at an in-scope resolver when
+	// egress is locked down.
+	EnvWildcardResolver = "AMASS_ENGINE_WILDCARD_RESOLVER"
+
+	// defaultWildcardResolver is used for wildcard detection when
+	// EnvWildcardResolver is not set.
+	defaultWildcardResolver = "8.8.4.4"
+)
+
+// resolverStartupSummary is a one-line description of the trusted-resolver
+// configuration chosen by trustedResolvers() at start-up. It is set once during
+// package initialization and read by the engine for logging via
+// ResolverStartupInfo.
+var resolverStartupSummary string
+
+// ResolverStartupInfo returns a one-line summary of the trusted-resolver
+// configuration selected at start-up (which list, how many resolvers, any pool
+// QPS cap, and the wildcard-detection resolver), including a warning when an
+// override was requested but could not be used. It is intended to be logged
+// once by the engine so operators can confirm an override took effect.
+func ResolverStartupInfo() string {
+	return resolverStartupSummary
+}
+
+// resolverListFromEnv parses EnvResolvers into a deduplicated list of resolver
+// IP addresses. The second return value reports whether the variable was set to
+// a non-empty value, so the caller can distinguish "no override requested" from
+// "override requested but nothing valid was found" and warn on the latter.
+func resolverListFromEnv() ([]string, bool) {
+	val := strings.TrimSpace(os.Getenv(EnvResolvers))
+	if val == "" {
+		return nil, false
+	}
+
+	var raw []string
+	// A readable, non-directory path is treated as a resolver file; anything
+	// else is treated as a comma-separated list.
+	if info, err := os.Stat(val); err == nil && !info.IsDir() {
+		if data, err := os.ReadFile(val); err == nil {
+			raw = strings.Split(string(data), "\n")
+		}
+	} else {
+		raw = strings.Split(val, ",")
+	}
+
+	seen := make(map[string]struct{})
+	var out []string
+	for _, r := range raw {
+		r = strings.TrimSpace(r)
+		if r == "" || strings.HasPrefix(r, "#") {
+			continue
+		}
+		if net.ParseIP(r) == nil {
+			continue // skip anything that is not a bare IP address
+		}
+		if _, dup := seen[r]; dup {
+			continue
+		}
+		seen[r] = struct{}{}
+		out = append(out, r)
+	}
+	return out, true
+}
+
+// resolverPoolQPS returns the aggregate pool QPS cap from EnvResolverQPS. 0
+// means no cap (the default, and also the result of an invalid value).
+func resolverPoolQPS() int {
+	val := strings.TrimSpace(os.Getenv(EnvResolverQPS))
+	if val == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(val); err == nil && n > 0 {
+		return n
+	}
+	return 0
+}
+
+// wildcardResolver returns the resolver IP used for wildcard detection: the
+// EnvWildcardResolver override when it is a valid IP, otherwise the default.
+func wildcardResolver() string {
+	val := strings.TrimSpace(os.Getenv(EnvWildcardResolver))
+	if val != "" && net.ParseIP(val) != nil {
+		return val
+	}
+	return defaultWildcardResolver
+}
 
 var (
 	ErrNameDoesNotExist     = errors.New("name does not exist")
@@ -142,17 +249,48 @@ func dnsQuery(ctx context.Context, msg *dns.Msg, r *pool.Pool) (*dns.Msg, error)
 func trustedResolvers() *pool.Pool {
 	timeout := 250 * time.Millisecond
 	cpus := runtime.NumCPU()
-	// wildcard detector
-	serv := servers.NewNameserver("8.8.4.4")
+
+	// wildcard detector (resolver configurable via EnvWildcardResolver)
+	wc := wildcardResolver()
+	serv := servers.NewNameserver(wc)
 	wconns := conn.New(cpus, selectors.NewSingle(timeout, serv))
 	detector = wildcards.NewDetector(serv, wconns, nil)
-	// the server pool
+
+	// Trusted resolver addresses: an operator-supplied override via
+	// EnvResolvers, otherwise the built-in baseline list.
+	addrs, requested := resolverListFromEnv()
+	override := len(addrs) > 0
+	var warn string
+	if !override {
+		if requested {
+			warn = fmt.Sprintf("; warning: %s was set but held no valid resolver addresses, using the built-in list", EnvResolvers)
+		}
+		for _, r := range baselineResolvers {
+			addrs = append(addrs, r.address)
+		}
+	}
+
 	var servs []types.Nameserver
-	for _, r := range baselineResolvers {
-		servs = append(servs, servers.NewNameserver(r.address))
+	for _, a := range addrs {
+		servs = append(servs, servers.NewNameserver(a))
 	}
 	sel := selectors.NewRoundRobin(timeout, servs...)
 	//sel := selectors.NewAuthoritative(timeout, servers.NewNameserver)
 	conns := conn.New(cpus, sel)
-	return pool.New(0, sel, conns, nil)
+
+	qps := resolverPoolQPS()
+
+	source := "built-in baseline list"
+	if override {
+		source = EnvResolvers + " override"
+	}
+	cap := "no pool QPS cap"
+	if qps > 0 {
+		cap = fmt.Sprintf("pool QPS cap %d", qps)
+	}
+	resolverStartupSummary = fmt.Sprintf(
+		"trusted DNS resolvers: %d from %s; %s; wildcard detector %s%s",
+		len(addrs), source, cap, wc, warn)
+
+	return pool.New(qps, sel, conns, nil)
 }
