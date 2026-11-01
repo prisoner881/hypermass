@@ -37,6 +37,12 @@ func (h *horLocation) check(e *et.Event) error {
 		return nil
 	}
 
+	// A shared address (a privacy proxy, registered agent or host) links
+	// unrelated registrants. Neither walk from it nor admit it to scope.
+	if support.SkipSharedLocation(e.Session, e.Entity, h.plugin.name) {
+		return nil
+	}
+
 	if h.plugin.isEntityInScope(e.Session, e.Entity) {
 		h.processInScope(e)
 	} else {
