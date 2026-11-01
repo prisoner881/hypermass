@@ -12,6 +12,7 @@ import (
 
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	dbt "github.com/owasp-amass/asset-db/types"
+	oam "github.com/owasp-amass/open-asset-model"
 	oamcon "github.com/owasp-amass/open-asset-model/contact"
 )
 
@@ -39,9 +40,21 @@ var (
 	sharedLocationsLogged sync.Map
 )
 
-// IsSharedLocation reports whether the Location entity is used by more than
-// MaxRecordsPerLocation records, and the number of records using it. Errors
-// fail open (not shared), which keeps the previous behavior.
+// maxSameAddressLocations bounds how many stored variants of one address
+// (other Location entities at the same building) are counted.
+const maxSameAddressLocations = 500
+
+// IsSharedLocation reports whether the Location entity is an address used
+// by more than MaxRecordsPerLocation records, and the number of records
+// counted. Records are counted across every stored variant of the same
+// address, not just this entity: the same building is often stored under
+// several free-text forms ("Salesforce, Inc. 415 Mission Street, 3rd Floor
+// ..." and "Attn: Accounts Payable 415 Mission Street, 3rd Floor ..."), each
+// with only a few records, while scope matching treats them all as one
+// address. Variants are the Locations with the same building number,
+// street, city and province (the fields scope matching compares); an
+// address without a building number, street or city is counted on its own.
+// Errors fail open (not shared), which keeps the previous behavior.
 func IsSharedLocation(sess et.Session, loc *dbt.Entity) (bool, int) {
 	if loc == nil {
 		return false, 0
@@ -56,27 +69,71 @@ func IsSharedLocation(sess et.Session, loc *dbt.Entity) (bool, int) {
 	ctx, cancel := context.WithTimeout(sess.Ctx(), 30*time.Second)
 	defer cancel()
 
+	variants := append([]*dbt.Entity{loc}, sameAddressLocations(ctx, sess, loc)...)
+
 	// Every record ever linked to the address counts, whatever its age:
 	// an address is shared because of how many parties use it, not because
 	// of when they were seen.
-	edges, err := sess.DB().IncomingEdges(ctx, loc, time.Time{}, "legal_address", "hq_address", "location")
-	if err != nil {
-		return false, 0
-	}
-
-	froms := make(map[string]struct{}, len(edges))
-	for _, edge := range edges {
-		if edge.FromEntity != nil {
-			froms[edge.FromEntity.ID] = struct{}{}
+	froms := make(map[string]struct{})
+	for i, v := range variants {
+		edges, err := sess.DB().IncomingEdges(ctx, v, time.Time{}, "legal_address", "hq_address", "location")
+		if err != nil {
+			if i == 0 {
+				return false, 0
+			}
+			continue
+		}
+		for _, edge := range edges {
+			if edge.FromEntity != nil {
+				froms[edge.FromEntity.ID] = struct{}{}
+			}
+		}
+		if len(froms) > MaxRecordsPerLocation {
+			break
 		}
 	}
 
 	n := len(froms)
 	if n > MaxRecordsPerLocation {
-		sharedLocations.Store(loc.ID, n)
+		// the verdict holds for every variant of the address
+		for _, v := range variants {
+			sharedLocations.Store(v.ID, n)
+		}
 		return true, n
 	}
 	return false, n
+}
+
+// sameAddressLocations returns the other Location entities stored for the
+// same building as loc, or none when loc lacks a building number, street
+// or city.
+func sameAddressLocations(ctx context.Context, sess et.Session, loc *dbt.Entity) []*dbt.Entity {
+	l, ok := loc.Asset.(*oamcon.Location)
+	if !ok || l.BuildingNumber == "" || l.StreetName == "" || l.City == "" {
+		return nil
+	}
+
+	filters := dbt.ContentFilters{
+		"building_number": l.BuildingNumber,
+		"street_name":     l.StreetName,
+		"city":            l.City,
+	}
+	if l.Province != "" {
+		filters["province"] = l.Province
+	}
+
+	ents, err := sess.DB().FindEntitiesByContent(ctx, oam.Location, time.Time{}, maxSameAddressLocations, filters)
+	if err != nil {
+		return nil
+	}
+
+	var results []*dbt.Entity
+	for _, ent := range ents {
+		if ent.ID != loc.ID {
+			results = append(results, ent)
+		}
+	}
+	return results
 }
 
 // SkipSharedLocation reports whether the Location entity is a shared address

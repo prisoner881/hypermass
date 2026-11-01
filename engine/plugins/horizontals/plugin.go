@@ -317,7 +317,9 @@ func (h *horizPlugin) getContactRecordOrganizations(sess et.Session, cr *dbt.Ent
 			continue
 		}
 
-		if _, valid := to.Asset.(*oamorg.Organization); valid {
+		// an organization named after a role ("Domain Administrator")
+		// links unrelated registrants; it is not evidence of ownership
+		if _, valid := to.Asset.(*oamorg.Organization); valid && !support.SkipRoleOrganization(sess, to, h.name) {
 			results = append(results, to)
 		}
 	}
