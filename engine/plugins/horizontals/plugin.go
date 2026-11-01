@@ -17,11 +17,13 @@ import (
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	dbt "github.com/owasp-amass/asset-db/types"
 	oam "github.com/owasp-amass/open-asset-model"
+	oamcert "github.com/owasp-amass/open-asset-model/certificate"
 	oamcon "github.com/owasp-amass/open-asset-model/contact"
 	oamgen "github.com/owasp-amass/open-asset-model/general"
 	oamnet "github.com/owasp-amass/open-asset-model/network"
 	oamorg "github.com/owasp-amass/open-asset-model/org"
 	oamreg "github.com/owasp-amass/open-asset-model/registration"
+	"golang.org/x/net/publicsuffix"
 )
 
 type horizPlugin struct {
@@ -528,6 +530,34 @@ func (h *horizPlugin) enqueueIfOutOfScope(sess et.Session, ent *dbt.Entity) {
 	if !h.isEntityInScope(sess, ent) {
 		h.addToScopeAndEnqueue(sess, ent)
 	}
+}
+
+// enqueueCertificateDomain adds the registered domain of the certificate's
+// common name to scope and queues that domain's FQDN for processing. A
+// certificate names a host (www.example.com), and only a registered domain
+// can be added to scope, so adding the certificate itself did nothing for
+// most certificates. Falls back to the certificate when the domain's FQDN
+// is not in the database.
+func (h *horizPlugin) enqueueCertificateDomain(sess et.Session, cert *dbt.Entity) {
+	c, ok := cert.Asset.(*oamcert.TLSCertificate)
+	if !ok {
+		return
+	}
+
+	name := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(c.SubjectCommonName)), "*.")
+	if dom, err := publicsuffix.EffectiveTLDPlusOne(name); err == nil {
+		ctx, cancel := context.WithTimeout(sess.Ctx(), 10*time.Second)
+		defer cancel()
+
+		if ents, err := sess.DB().FindEntitiesByContent(ctx, oam.FQDN, time.Time{}, 1, dbt.ContentFilters{
+			"name": dom,
+		}); err == nil && len(ents) == 1 {
+			h.enqueueIfOutOfScope(sess, ents[0])
+			return
+		}
+	}
+
+	h.enqueueIfOutOfScope(sess, cert)
 }
 
 func (h *horizPlugin) getRegisteredDomainEntity(sess et.Session, record *dbt.Entity) (*dbt.Entity, error) {

@@ -18,6 +18,7 @@ import (
 	oamorg "github.com/owasp-amass/open-asset-model/org"
 	oamreg "github.com/owasp-amass/open-asset-model/registration"
 	oamurl "github.com/owasp-amass/open-asset-model/url"
+	"golang.org/x/net/publicsuffix"
 )
 
 func (s *Scope) Add(a oam.Asset) bool {
@@ -43,8 +44,13 @@ func (s *Scope) Add(a oam.Asset) bool {
 	case *oamreg.AutnumRecord:
 		newentry = s.AddASN(v.Number)
 	case *oamcert.TLSCertificate:
-		if re := amassdns.AnySubdomainRegex(); re.MatchString(v.SubjectCommonName) {
-			newentry = s.AddDomain(v.SubjectCommonName)
+		// a certificate names a host (www.example.com) and only registered
+		// domains can be added, so add the common name's registered domain
+		name := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(v.SubjectCommonName)), "*.")
+		if re := amassdns.AnySubdomainRegex(); re.MatchString(name) {
+			if dom, err := publicsuffix.EffectiveTLDPlusOne(name); err == nil {
+				newentry = s.AddDomain(dom)
+			}
 		}
 	case *oamurl.URL:
 		if ip, err := netip.ParseAddr(v.Host); err == nil {
