@@ -238,7 +238,11 @@ stop and replace the engine container.
 
 Results are in the asset database from the moment they are discovered, so
 nothing needs saving through the API before terminating. `GET /scope/{type}`
-lists the session's scope (not its findings) if you want a record of it.
+lists the session's scope (not its findings) if you want a record of it; the
+scope is held only in the engine and is gone once the session ends. (`enum
+-scope-json` does this for you: just before it ends the session it prints the
+domain, netblock, ASN and IP address scope to stdout as one line,
+`HYPERMASS_SCOPE {json}`, even with `-silent`.)
 
 ### Stopping a run early
 
