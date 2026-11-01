@@ -37,6 +37,12 @@ func (h *horOrg) check(e *et.Event) error {
 		return nil
 	}
 
+	// An organization named after a role ("Domain Administrator") is shared
+	// by unrelated registrants. Neither walk from it nor admit it to scope.
+	if support.SkipRoleOrganization(e.Session, e.Entity, h.plugin.name) {
+		return nil
+	}
+
 	if h.plugin.isEntityInScope(e.Session, e.Entity) {
 		h.processInScope(e)
 	} else {

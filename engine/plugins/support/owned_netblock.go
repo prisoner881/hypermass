@@ -16,6 +16,7 @@ import (
 	oam "github.com/owasp-amass/open-asset-model"
 	"github.com/owasp-amass/open-asset-model/general"
 	oamnet "github.com/owasp-amass/open-asset-model/network"
+	oamreg "github.com/owasp-amass/open-asset-model/registration"
 )
 
 // OwnedNetblockSource tags IPs synthesized because an RDAP contact
@@ -102,6 +103,21 @@ func IPInOwnedNetblock(ctx context.Context, session et.Session, ip *dbt.Entity) 
 		}
 	}
 	return false
+}
+
+// IPNetRecordOwnedBySeed is true when an RDAP contact email on the
+// IPNetRecord uses a domain in the session seed list: the same ownership
+// signal as NetblockOwnedBySeed, read from the registration record itself.
+// Fail-closed like NetblockOwnedBySeed.
+func IPNetRecordOwnedBySeed(ctx context.Context, session et.Session, ipnet *dbt.Entity) (bool, string) {
+	if session == nil || ipnet == nil {
+		return false, ""
+	}
+	if _, ok := ipnet.Asset.(*oamreg.IPNetRecord); !ok {
+		return false, ""
+	}
+	email, ok := seedContactEmail(ctx, session, ipnet)
+	return ok, email
 }
 
 func seedContactEmail(ctx context.Context, session et.Session, ipnet *dbt.Entity) (string, bool) {

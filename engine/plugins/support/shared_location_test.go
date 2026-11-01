@@ -117,3 +117,58 @@ func TestIsSharedLocation(t *testing.T) {
 		t.Fatal("nil: want not shared")
 	}
 }
+
+// The blue.cl incident: "Salesforce, Inc. 415 Mission Street ..." was
+// skipped as shared, but "Attn: Accounts Payable 415 Mission Street ..." (the
+// same building, stored as a separate Location with a handful of records)
+// was admitted. Records count across every variant of the building.
+func TestIsSharedLocationCountsAddressVariants(t *testing.T) {
+	db, err := assetdb.New(sqlite3.SQLite, filepath.Join(t.TempDir(), "assets.db"))
+	if err != nil {
+		t.Fatalf("failed to open the test asset database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	sess := &sharedLocTestSession{id: uuid.New(), db: db}
+	ctx := context.Background()
+
+	mission := func(address, country string) *dbt.Entity {
+		ent, err := db.CreateAsset(ctx, &oamcon.Location{
+			Address: address, BuildingNumber: "415", StreetName: "mission street",
+			City: "san francisco", Province: "ca", PostalCode: "94105", Country: country,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ent
+	}
+	main := mission("Salesforce, Inc. 415 Mission Street, 3rd Floor San Francisco CA 94105 US", "US")
+	ap := mission("Attn: Accounts Payable 415 Mission Street, 3rd Floor San Francisco CA 94105 United States", "US")
+	legal := mission("Legal Department 415 Mission Street San Francisco CA 94105 US", "US")
+	next, err := db.CreateAsset(ctx, &oamcon.Location{
+		Address: "Some Startup 417 Mission Street San Francisco CA 94105 US", BuildingNumber: "417",
+		StreetName: "mission street", City: "san francisco", Province: "ca", Country: "US",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 12 + 10 + 4 = 26 records at 415 Mission, none over the cap alone
+	linkContactRecords(t, db, main, "main", 12)
+	linkContactRecords(t, db, ap, "ap", 10)
+	linkContactRecords(t, db, legal, "legal", 4)
+	linkContactRecords(t, db, next, "next", 3)
+
+	if shared, n := IsSharedLocation(sess, ap); !shared || n != 26 {
+		t.Fatalf("Accounts Payable variant: got shared=%v n=%d, want true 26", shared, n)
+	}
+	// the verdict covers the other variants without counting again
+	for _, v := range []*dbt.Entity{main, legal} {
+		if shared, _ := IsSharedLocation(sess, v); !shared {
+			t.Fatalf("%s: want shared", v.Asset.Key())
+		}
+	}
+	// a neighbouring building is a different address
+	if shared, n := IsSharedLocation(sess, next); shared || n != 3 {
+		t.Fatalf("417 Mission: got shared=%v n=%d, want false 3", shared, n)
+	}
+}

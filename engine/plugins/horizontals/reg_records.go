@@ -5,8 +5,12 @@
 package horizontals
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"time"
 
+	"github.com/owasp-amass/amass/v5/engine/plugins/support"
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	dbt "github.com/owasp-amass/asset-db/types"
 	oam "github.com/owasp-amass/open-asset-model"
@@ -155,8 +159,17 @@ func (h *horRegRec) processDomainRecord(e *et.Event, orgs []*dbt.Entity, locs []
 }
 
 func (h *horRegRec) processIPNetRecord(e *et.Event, orgs []*dbt.Entity, locs []*dbt.Entity) {
-	// check if the ipnet record / registered netblock is in scope
-	if h.plugin.isEntityInScope(e.Session, e.Entity) {
+	// A netblock in scope does not make its registrant the target. The
+	// ambient path admits a provider's small block when only the target's
+	// hosts sit on it (an in-scope name resolves into a Salesforce, CDN or
+	// cloud range), which makes the target a tenant there, not the owner.
+	// So an in-scope record expands to its registrant's organizations and
+	// locations only when the block is attributed to the target: an RDAP
+	// contact email on a seed domain. Otherwise it is handled like an
+	// out-of-scope record below, and expands only when its registrant is
+	// already known to be in scope.
+	inScope := h.plugin.isEntityInScope(e.Session, e.Entity)
+	if inScope && h.ownedBySeed(e) {
 		for _, o := range orgs {
 			h.plugin.enqueueIfOutOfScope(e.Session, o)
 		}
@@ -195,5 +208,21 @@ func (h *horRegRec) processIPNetRecord(e *et.Event, orgs []*dbt.Entity, locs []*
 		for _, loc := range locs {
 			h.plugin.enqueueIfOutOfScope(e.Session, loc)
 		}
+	} else if inScope {
+		if rec, ok := e.Entity.Asset.(*oamreg.IPNetRecord); ok {
+			e.Session.Log().Info("not expanding scope from netblock registration: registrant not attributed to the target",
+				"cidr", rec.CIDR.String(), "registrant", rec.Name,
+				slog.Group("plugin", "name", h.plugin.name, "handler", h.name))
+		}
 	}
+}
+
+// ownedBySeed reports whether the IPNetRecord is attributed to the target
+// by an RDAP contact email on a seed domain.
+func (h *horRegRec) ownedBySeed(e *et.Event) bool {
+	ctx, cancel := context.WithTimeout(e.Session.Ctx(), 15*time.Second)
+	defer cancel()
+
+	owned, _ := support.IPNetRecordOwnedBySeed(ctx, e.Session, e.Entity)
+	return owned
 }

@@ -241,8 +241,15 @@ func (r *domrec) storeContact(e *et.Event, c *domrecContact, dr *dbt.Entity, m *
 		found = true
 		addr = fmt.Sprintf("%s %s %s %s %s",
 			wc.Street, wc.City, wc.Province, wc.PostalCode, wc.Country)
-	} else {
+	} else if !support.IsRoleName(wc.Name) {
 		wc.Organization = wc.Name
+	}
+	// A role name ("Domain Administrator", "Hostmaster") is a job, not an
+	// organization: thousands of unrelated registrants share each one, so an
+	// organization by that name would tie all their domains together. The
+	// contact's own Organization field is kept instead, if it has one.
+	if support.IsRoleName(wc.Organization) {
+		wc.Organization = ""
 	}
 
 	if found {
@@ -300,7 +307,7 @@ func (r *domrec) storeContact(e *et.Event, c *domrecContact, dr *dbt.Entity, m *
 	support.ProcessAssetsWithSource(e, findings, r.plugin.source, r.plugin.name, r.name)
 
 	// the organization must come last due to a potential chicken-and-egg problem
-	if m.IsMatch(string(oam.Organization)) {
+	if m.IsMatch(string(oam.Organization)) && strings.TrimSpace(wc.Organization) != "" {
 		orgent, err := org.CreateOrgAsset(e.Session, cr,
 			&general.SimpleRelation{Name: "organization"},
 			&oamorg.Organization{Name: wc.Organization}, r.plugin.source)
