@@ -105,7 +105,7 @@ func (h *horLocation) processInScope(e *et.Event) {
 							h.plugin.enqueueIfOutOfScope(e.Session, nb)
 						}
 					case *oamcert.TLSCertificate:
-						h.plugin.enqueueIfOutOfScope(e.Session, from)
+						h.plugin.enqueueCertificateDomain(e.Session, from)
 					}
 				}
 			}

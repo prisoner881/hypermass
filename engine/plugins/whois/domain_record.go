@@ -241,14 +241,15 @@ func (r *domrec) storeContact(e *et.Event, c *domrecContact, dr *dbt.Entity, m *
 		found = true
 		addr = fmt.Sprintf("%s %s %s %s %s",
 			wc.Street, wc.City, wc.Province, wc.PostalCode, wc.Country)
-	} else if !support.IsRoleName(wc.Name) {
+	} else if !support.IsGenericName(wc.Name) {
 		wc.Organization = wc.Name
 	}
 	// A role name ("Domain Administrator", "Hostmaster") is a job, not an
-	// organization: thousands of unrelated registrants share each one, so an
-	// organization by that name would tie all their domains together. The
-	// contact's own Organization field is kept instead, if it has one.
-	if support.IsRoleName(wc.Organization) {
+	// organization, and a non-name ("N/A", "Private Person") names none:
+	// thousands of unrelated registrants share each one, so an organization
+	// by that name would tie all their domains together. The contact's own
+	// Organization field is kept instead, if it is a real name.
+	if support.IsGenericName(wc.Organization) {
 		wc.Organization = ""
 	}
 
