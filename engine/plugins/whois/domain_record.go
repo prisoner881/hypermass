@@ -206,8 +206,11 @@ func (r *domrec) store(e *et.Event, resp *whoisparser.WhoisInfo, asset *dbt.Enti
 		{resp.Billing, "billing_contact", base + "Billing Contact Info"},
 	}
 	for _, c := range contacts {
-		if c.WhoisContact != nil &&
-			(c.RelationName != "registrant_contact" || !r.hasPlaceholders(c.WhoisContact)) {
+		// Skip privacy/proxy placeholders in every role, not only the
+		// registrant: a proxy's admin/technical/billing contacts carry the
+		// same shared address and would tie each domain it fronts to the
+		// thousands of others behind the same proxy.
+		if c.WhoisContact != nil && !r.hasPlaceholders(c.WhoisContact) {
 			r.storeContact(e, c, asset, m)
 		}
 	}

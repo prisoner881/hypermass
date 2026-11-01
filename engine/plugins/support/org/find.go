@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/caffix/stringset"
+	"github.com/owasp-amass/amass/v5/engine/plugins/support"
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	dbt "github.com/owasp-amass/asset-db/types"
 	oam "github.com/owasp-amass/open-asset-model"
@@ -192,6 +193,13 @@ func existsAndSharesLocEntity(sess et.Session, obj *dbt.Entity, o *oamorg.Organi
 
 	var orgents, crecords []*dbt.Entity
 	for _, loc := range locs {
+		// Organizations that merely share a privacy proxy's or registered
+		// agent's address are not the same organization; matching on one
+		// merges unrelated registrants ("On behalf of a.co owner" with
+		// "On behalf of b.co owner") and walks thousands of records.
+		if support.SkipSharedLocation(sess, loc, "Organization-Dedup") {
+			continue
+		}
 		if edges, err := sess.DB().IncomingEdges(ctx, loc, time.Time{}, "legal_address", "hq_address", "location"); err == nil {
 			for _, edge := range edges {
 				if a, err := sess.DB().FindEntityById(ctx, edge.FromEntity.ID); err == nil && a != nil {

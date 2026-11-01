@@ -85,6 +85,9 @@ func DetectRegistrantPlaceholder(value string) PrivacyDetection {
 		"privacy protection service":   "PRIVACY_PROTECTION_SERVICE",
 		"domain privacy service":       "DOMAIN_PRIVACY_SERVICE",
 		"identity protected":           "IDENTITY_PROTECTED",
+		"identity protection service":  "IDENTITY_PROTECTION_SERVICE",
+		"whoisproxy":                   "WHOISPROXY",
+		"domainsbyproxy":               "DOMAINS_BY_PROXY",
 	}
 
 	for token, label := range strongTokens {
@@ -153,6 +156,28 @@ func DetectRegistrantPlaceholder(value string) PrivacyDetection {
 		}
 	}
 
+	// "On behalf of example.com owner" (Amazon Registrar's privacy service
+	// and others): the proxy names the domain in place of its owner. Every
+	// such record is unique per domain, so organization matching alone
+	// would never catch it, yet each one sits at the proxy's shared address.
+	if onBehalfOfDomainRE.MatchString(n) {
+		add(12, "ON_BEHALF_OF_DOMAIN", onBehalfOfDomainRE.String())
+	}
+
+	// email checks: a mailbox at a known privacy service, or a mailbox named
+	// by a hash (32+ hex digits), which privacy services issue so each
+	// domain gets a unique forwarding address. Both are proxy hallmarks;
+	// a real organization's WHOIS contact never looks like either.
+	for _, m := range emailRE.FindAllStringSubmatch(n, -1) {
+		local, domain := m[1], m[2]
+		if isPrivacyMailDomain(domain) {
+			add(10, "PRIVACY_SERVICE_MAIL_DOMAIN", domain)
+		}
+		if hashedMailboxRE.MatchString(local) {
+			add(10, "HASHED_MAILBOX", hashedMailboxRE.String())
+		}
+	}
+
 	// heuristic: email-like redactions (e.g., "redacted@privacy", "email hidden", etc.)
 	if looksLikeEmailRedaction(n) {
 		add(7, "EMAIL_REDACTED_HEURISTIC", "looksLikeEmailRedaction")
@@ -170,6 +195,40 @@ func DetectRegistrantPlaceholder(value string) PrivacyDetection {
 		Matches:       matches,
 		Normalized:    n,
 	}
+}
+
+var (
+	// "on behalf of <domain>" optionally followed by a role such as
+	// "owner", "admin", "technical contact"; matched on the normalized value.
+	onBehalfOfDomainRE = regexp.MustCompile(`^on behalf of [a-z0-9][a-z0-9-]*(\.[a-z0-9-]+)+( [a-z]+){0,3}$`)
+	emailRE            = regexp.MustCompile(`([a-z0-9._+-]+)@([a-z0-9-]+(?:\.[a-z0-9-]+)+)`)
+	hashedMailboxRE    = regexp.MustCompile(`^[0-9a-f]{32,}$`)
+)
+
+// privacyMailDomains are mail domains used only by WHOIS privacy/proxy
+// services. A contact mailbox at one of these, or at a subdomain of one
+// (e.g. example.com.whoisproxy.org), is a proxy, not the registrant.
+var privacyMailDomains = []string{
+	"whoisproxy.org",
+	"whoisproxy.com",
+	"domainsbyproxy.com",
+	"privatedomain.gkg.net",
+	"withheldforprivacy.com",
+	"privacyguardian.org",
+	"contactprivacy.com",
+	"whoisguard.com",
+	"whoisprivacycorp.com",
+	"proxy.dreamhost.com",
+}
+
+func isPrivacyMailDomain(domain string) bool {
+	domain = strings.TrimSuffix(domain, ".")
+	for _, d := range privacyMailDomains {
+		if domain == d || strings.HasSuffix(domain, "."+d) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeWHOISValue(s string) string {

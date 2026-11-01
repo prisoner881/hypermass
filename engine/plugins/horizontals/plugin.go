@@ -239,6 +239,10 @@ func (h *horizPlugin) getContactRecord(sess et.Session, ent *dbt.Entity, label s
 	return nil, errors.New("failed to cast the ContactRecord entity")
 }
 
+// lookupContactRecordOrgsAndLocations returns the organizations and locations
+// of the contact record. Shared addresses (support.SkipSharedLocation) are
+// left out: they are not evidence of ownership, so they must neither enter
+// scope nor make a record look related to one that is in scope.
 func (h *horizPlugin) lookupContactRecordOrgsAndLocations(sess et.Session, cr *dbt.Entity) ([]*dbt.Entity, []*dbt.Entity) {
 	var orgents []*dbt.Entity
 
@@ -262,7 +266,9 @@ func (h *horizPlugin) lookupContactRecordOrgsAndLocations(sess et.Session, cr *d
 				}
 				if _, valid := ent.Asset.(*oamcon.Location); valid {
 					set.Insert(ent.ID)
-					locents = append(locents, ent)
+					if !support.SkipSharedLocation(sess, ent, h.name) {
+						locents = append(locents, ent)
+					}
 				}
 			}
 		}
@@ -275,7 +281,9 @@ func (h *horizPlugin) lookupContactRecordOrgsAndLocations(sess et.Session, cr *d
 			}
 			if _, valid := ent.Asset.(*oamcon.Location); valid {
 				set.Insert(ent.ID)
-				locents = append(locents, ent)
+				if !support.SkipSharedLocation(sess, ent, h.name) {
+					locents = append(locents, ent)
+				}
 			}
 		}
 	}
