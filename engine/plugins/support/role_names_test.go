@@ -83,3 +83,26 @@ func TestSkipRoleOrganization(t *testing.T) {
 		t.Error("nil: want not skipped")
 	}
 }
+
+// Non-names name no organization; each is shared by unrelated registrants
+// or devices, like a role name.
+func TestIsNonName(t *testing.T) {
+	for _, name := range []string{
+		"N/A", "n/a", "NA", "None", "NULL", "Unknown", "Not Applicable", "-", ".", "--",
+		"Private Person", "PRIVATE PERSON", "Individual", "Personal", "Private",
+		"Internet Widgits Pty Ltd", "Default Company Ltd", "MyCompany", "My Company",
+	} {
+		if !IsNonName(name) || !IsGenericName(name) {
+			t.Errorf("%q: want non-name", name)
+		}
+	}
+	for _, name := range []string{
+		"", "   ", "Crayon AS", "Salesforce, Inc.", "Private Equity Partners LLC",
+		"Personal Capital Corporation", "Unknown Worlds Entertainment", "None Such Records",
+		"Individual Retirement Services Inc", "Widgits Pty Ltd", "NA Holdings",
+	} {
+		if IsNonName(name) {
+			t.Errorf("%q: want a real name", name)
+		}
+	}
+}

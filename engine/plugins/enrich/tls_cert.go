@@ -421,7 +421,11 @@ func (te *tlsexpand) storeContact(e *et.Event, c *tlsContact, asset *dbt.Entity,
 	support.ProcessAssetsWithSource(e, findings, te.source, te.name, te.name+"-Handler")
 
 	// the organization must come last due to a potential chicken-and-egg problem
-	if m.IsMatch(string(oam.Organization)) && len(ct.Organization) > 0 && ct.Organization[0] != "" {
+	// A placeholder subject organization ("Internet Widgits Pty Ltd" in every
+	// default OpenSSL certificate, "MyCompany") names no organization and is
+	// shared by unrelated devices, so it does not become one.
+	if m.IsMatch(string(oam.Organization)) && len(ct.Organization) > 0 && ct.Organization[0] != "" &&
+		!support.IsGenericName(ct.Organization[0]) {
 		orgent, err := org.CreateOrgAsset(e.Session, cr,
 			&general.SimpleRelation{Name: "organization"},
 			&oamorg.Organization{Name: ct.Organization[0]}, src)
