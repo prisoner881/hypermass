@@ -23,60 +23,90 @@ import (
 	oamplat "github.com/owasp-amass/open-asset-model/platform"
 )
 
+// storeItemTimeout bounds the database writes for one stored name or email
+// address. Each item gets its own deadline: one deadline shared by a whole
+// batch let the first 30 seconds of a large answer (IP-THC returns up to
+// 50,000 names for a domain) be stored and failed every name after that.
+const storeItemTimeout = 15 * time.Second
+
+// StoreFQDNsWithSource stores the names as FQDNs tagged with the source and
+// returns the stored entities. Failures are logged once per call, as a
+// summary.
 func StoreFQDNsWithSource(session et.Session, names []string, src *et.Source, plugin, handler string) []*dbt.Entity {
-	var results []*dbt.Entity
-
-	if len(names) == 0 || src == nil {
-		return results
-	}
-
-	ctx, cancel := context.WithTimeout(session.Ctx(), 30*time.Second)
-	defer cancel()
-
-	for _, name := range names {
-		if a, err := session.DB().CreateAsset(ctx, &oamdns.FQDN{Name: name}); err == nil && a != nil {
-			results = append(results, a)
-			_, _ = session.DB().CreateEntityProperty(ctx, a, &oamgen.SourceProperty{
-				Source:     src.Name,
-				Confidence: src.Confidence,
-			})
-		} else {
-			session.Log().Error(err.Error(), slog.Group("plugin", "name", plugin, "handler", handler))
-		}
-	}
-
+	results, _ := StoreFQDNsWithSourceCount(session, names, src, plugin, handler)
 	return results
 }
 
+// StoreFQDNsWithSourceCount is StoreFQDNsWithSource, also reporting how many
+// names could not be stored, so that a caller can leave the lookup unmarked
+// and retry it.
+func StoreFQDNsWithSourceCount(session et.Session, names []string, src *et.Source, plugin, handler string) ([]*dbt.Entity, int) {
+	return storeEach(session, names, src, plugin, handler, "names", func(name string) oam.Asset {
+		return &oamdns.FQDN{Name: name}
+	})
+}
+
+// StoreEmailsWithSource stores the email addresses as identifiers tagged
+// with the source and returns the stored entities. Failures are logged once
+// per call, as a summary.
 func StoreEmailsWithSource(session et.Session, emails []string, src *et.Source, plugin, handler string) []*dbt.Entity {
-	var results []*dbt.Entity
-
-	if len(emails) == 0 || src == nil {
-		return results
-	}
-
-	ctx, cancel := context.WithTimeout(session.Ctx(), 30*time.Second)
-	defer cancel()
-
-	for _, e := range emails {
+	results, _ := storeEach(session, emails, src, plugin, handler, "email addresses", func(e string) oam.Asset {
 		email := strings.ToLower(e)
-
-		if a, err := session.DB().CreateAsset(ctx, &oamgen.Identifier{
+		return &oamgen.Identifier{
 			UniqueID: fmt.Sprintf("%s:%s", oamgen.EmailAddress, email),
 			ID:       email,
 			Type:     oamgen.EmailAddress,
-		}); err == nil && a != nil {
+		}
+	})
+	return results
+}
+
+// storeEach stores one asset per item, each with its own deadline, and
+// returns the stored entities and the number of items that failed. It stops
+// when the session ends; the items not attempted count as failed.
+func storeEach(session et.Session, items []string, src *et.Source, plugin, handler, kind string,
+	asset func(string) oam.Asset) ([]*dbt.Entity, int) {
+	var results []*dbt.Entity
+	if len(items) == 0 || src == nil {
+		return results, 0
+	}
+
+	var failed int
+	var firstErr error
+	for i, item := range items {
+		if session.Ctx().Err() != nil {
+			failed += len(items) - i
+			if firstErr == nil {
+				firstErr = session.Ctx().Err()
+			}
+			break
+		}
+
+		ctx, cancel := context.WithTimeout(session.Ctx(), storeItemTimeout)
+		a, err := session.DB().CreateAsset(ctx, asset(item))
+		if err == nil && a != nil {
 			results = append(results, a)
 			_, _ = session.DB().CreateEntityProperty(ctx, a, &oamgen.SourceProperty{
 				Source:     src.Name,
 				Confidence: src.Confidence,
 			})
 		} else {
-			session.Log().Error(err.Error(), slog.Group("plugin", "name", plugin, "handler", handler))
+			failed++
+			if firstErr == nil {
+				firstErr = err
+				if err == nil {
+					firstErr = errors.New("the database returned no entity")
+				}
+			}
 		}
+		cancel()
 	}
 
-	return results
+	if failed > 0 {
+		session.Log().Error("failed to store "+kind, "failed", failed, "stored", len(results),
+			"error", firstErr.Error(), slog.Group("plugin", "name", plugin, "handler", handler))
+	}
+	return results, failed
 }
 
 func MarkAssetMonitored(session et.Session, asset *dbt.Entity, src *et.Source) {
