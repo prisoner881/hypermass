@@ -129,6 +129,13 @@ type Config struct {
 	// Determines rigidness of the enumeration
 	Rigid bool `yaml:"rigid_boundaries" json:"rigid_boundaries"`
 
+	// ScopeVetoes controls the engine's scope-expansion vetoes: "enforce"
+	// (the default, also used when empty) declines scope additions that the
+	// evidence says belong to someone else; "observe" logs each veto as
+	// "would decline" and keeps the previous behavior; "off" skips them.
+	// Every decision is logged as "scope decision".
+	ScopeVetoes string `yaml:"scope_vetoes,omitempty" json:"scope_vetoes,omitempty"`
+
 	blacklistLock sync.Mutex `yaml:"-" json:"-"`
 
 	// A list of data sources that should not be utilized
@@ -318,6 +325,7 @@ func (c *Config) LoadSettings(path string) error {
 		c.loadActiveSettings,
 		c.loadActiveProxySettings,
 		c.loadRigidSettings,
+		c.loadScopeVetoSettings,
 	}
 	for _, load := range loads {
 		if err := load(c); err != nil {

@@ -313,7 +313,12 @@ func (te *tlsexpand) store(e *et.Event, cert *x509.Certificate, asset *dbt.Entit
 	support.ProcessAssetsWithSource(e, findings, te.source, te.name, te.name+"-Handler")
 
 	if m.IsMatch(string(oam.ContactRecord)) {
-		base := "x509 Certificate: " + cert.SerialNumber.String() + ", "
+		// Keyed by issuer and subject as well as serial: serials are unique
+		// only per issuer, and keying by serial alone merged the contacts of
+		// unrelated certificates that share one (default and self-signed
+		// certificates reuse 0, 1, ...).
+		base := "x509 Certificate: " + cert.SerialNumber.String() +
+			", Issuer: " + cert.Issuer.CommonName + ", Subject: " + cert.Subject.CommonName + ", "
 		contacts := []*tlsContact{
 			{&cert.Subject, "subject_contact", base + "Subject"},
 			{&cert.Issuer, "issuer_contact", base + "Issuer"},

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/owasp-amass/amass/v5/config"
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	assetdb "github.com/owasp-amass/asset-db"
 	"github.com/owasp-amass/asset-db/repository"
@@ -24,8 +25,20 @@ import (
 
 type sharedLocTestSession struct {
 	et.Session
-	id uuid.UUID
-	db repository.Repository
+	id  uuid.UUID
+	db  repository.Repository
+	cfg *config.Config
+}
+
+// Config gives each test session its own database identity, so the
+// process-wide verdict caches (keyed by database and entity ID) do not
+// carry verdicts between tests, whose databases reuse entity IDs.
+func (s *sharedLocTestSession) Config() *config.Config {
+	if s.cfg == nil {
+		s.cfg = config.NewConfig()
+		s.cfg.GraphDBs = []*config.Database{{System: "sqlite", Primary: true, DBName: s.id.String()}}
+	}
+	return s.cfg
 }
 
 func (s *sharedLocTestSession) ID() uuid.UUID        { return s.id }
@@ -65,8 +78,10 @@ func TestIsSharedLocation(t *testing.T) {
 	sess := &sharedLocTestSession{id: uuid.New(), db: db}
 	ctx := context.Background()
 
+	// counted, not care-of text: a care-of address is shared at once
+	// (TestIsSharedLocationCareOf)
 	proxy, err := db.CreateAsset(ctx, &oamcon.Location{
-		Address:        "c/o whoisproxy.com 604 Cameron Street Alexandria VA 22314 US",
+		Address:        "604 Cameron Street Alexandria VA 22314 US",
 		BuildingNumber: "604", StreetName: "cameron street", City: "alexandria",
 		Province: "VA", PostalCode: "22314", Country: "US",
 	})
@@ -170,5 +185,33 @@ func TestIsSharedLocationCountsAddressVariants(t *testing.T) {
 	// a neighbouring building is a different address
 	if shared, n := IsSharedLocation(sess, next); shared || n != 3 {
 		t.Fatalf("417 Mission: got shared=%v n=%d, want false 3", shared, n)
+	}
+}
+
+// A care-of or mail-drop address is shared with no records counted, so it
+// holds on an empty database too.
+func TestIsSharedLocationCareOf(t *testing.T) {
+	db, err := assetdb.New(sqlite3.SQLite, filepath.Join(t.TempDir(), "assets.db"))
+	if err != nil {
+		t.Fatalf("failed to open the test asset database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	sess := &sharedLocTestSession{id: uuid.New(), db: db}
+	ctx := context.Background()
+
+	for _, address := range []string{
+		"C/O THE CORPORATION TRUST COMPANY CORPORATION TRUST CENTER 1209 ORANGE ST WILMINGTON DE 19801 US",
+		"1928 E. Highland Ave. Ste F104 PMB# 255 Phoenix AZ 85016 US",
+	} {
+		loc, err := db.CreateAsset(ctx, &oamcon.Location{Address: address, City: "x", Country: "US"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if shared, n := IsSharedLocation(sess, loc); !shared || n != -1 {
+			t.Errorf("%s: got shared=%v n=%d, want true -1", address, shared, n)
+		}
+		if !SkipSharedLocation(sess, loc, "test") {
+			t.Errorf("%s: want skipped", address)
+		}
 	}
 }

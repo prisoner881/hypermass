@@ -57,6 +57,7 @@ func NewEngine(l *slog.Logger) (*Engine, error) {
 	mgr.SetShutdownHook(func(s et.Session) {
 		support.FinishOwnedNetblockFills(s, dis)
 		protocol_probes.SweepMissedIPs(s, dis)
+		support.ForgetSession(s)
 	})
 
 	srv, err := server.NewServer(l, dis, mgr)

@@ -790,6 +790,10 @@ const docTemplate = `{
                     "description": "Determines rigidness of the enumeration",
                     "type": "boolean"
                 },
+                "scope_vetoes": {
+                    "description": "ScopeVetoes controls the engine's scope-expansion vetoes: \"enforce\" (the default, also used when empty) declines scope additions that the evidence says belong to someone else; \"observe\" logs each veto as \"would decline\" and keeps the previous behavior; \"off\" skips them. Every decision is logged as \"scope decision\".",
+                    "type": "string"
+                },
                 "scope": {
                     "description": "Scope struct that contains ASN, CIDR, Domain, IP, and ports in scope",
                     "allOf": [

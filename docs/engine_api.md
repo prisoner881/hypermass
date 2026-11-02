@@ -277,6 +277,7 @@ engine reads; anything else is ignored.
 | `active_proxy` | string | `""` | Proxy for all active traffic: `socks5://`, `socks5h://`, `http://` or `https://`, optionally with `user:pass@`. A bare `host:port` is rejected. |
 | `active_strict` | boolean | **`true`** when the field is omitted | With `active: true` and no `active_proxy`, refuse the session. Send `false` to allow active traffic over the engine's own network. |
 | `rigid_boundaries` | boolean | `false` | When `true`, the scope never grows during the run: newly associated domains, netblocks and organizations are not added to it, and the horizontal-expansion plugins do not run. |
+| `scope_vetoes` | string | `"enforce"` | How the engine treats evidence that an asset about to join the scope belongs to someone else: a netblock that only a target name resolves into, a netblock or ASN whose registration names another organization, a shared ASN, a certificate that merges unrelated certificates. `"enforce"` declines the addition, `"observe"` makes it as before but logs it, `"off"` skips the checks. Every decision is logged as `scope decision`, with `action` set to `declined` or `would decline`. An unrecognized value means `"enforce"`. |
 | `brute_force` | boolean | `false` | Together with `alterations`, enables name alterations. There is no separate brute-force plugin in this version. |
 | `alterations` | boolean | `false` | Generate alterations of discovered names; needs `brute_force` too. |
 | `wordlist` | array of strings | none | Brute-force wordlist (not used in this version). |
