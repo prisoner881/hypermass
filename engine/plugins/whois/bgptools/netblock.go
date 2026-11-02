@@ -231,7 +231,10 @@ func (r *netblock) store(e *et.Event, cidr netip.Prefix, ip *dbt.Entity, asn int
 	// not size-gated); individual in-scope-resolving IPs are authorized
 	// independently in dns/ip.go.
 	// Both conditions are required: see ip_netblock.go.
-	if support.PrefixEligibleForAmbientAdmit(netblock.CIDR) && support.HasInScopeFQDN(ctx, e.Session, ip) {
+	// Resolution alone no longer admits a block: see ip_netblock.go.
+	if support.PrefixEligibleForAmbientAdmit(netblock.CIDR) && support.HasInScopeFQDN(ctx, e.Session, ip) &&
+		!support.Decline(e.Session, support.VetoResolutionOnly, string(oam.Netblock), netblock.CIDR.String(), r.plugin.name,
+			"asn", asn) {
 		e.Session.Scope().Add(netblock)
 	}
 	support.AdmitOwnedNetblock(e, nb)

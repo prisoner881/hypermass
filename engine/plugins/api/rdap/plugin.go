@@ -41,6 +41,7 @@ type rdapPlugin struct {
 	autsys   *autsys
 	autnum   *autnum
 	netblock *netblock
+	ipaddr   *ipaddr
 	ipnet    *ipnet
 	source   *et.Source
 }
@@ -154,6 +155,23 @@ func (rd *rdapPlugin) Start(r et.Registry) error {
 		return err
 	}
 
+	rd.ipaddr = &ipaddr{
+		name:   rd.name + "-IPAddress-Handler",
+		plugin: rd,
+	}
+	if err := r.RegisterHandler(&et.Handler{
+		Plugin:       rd,
+		Name:         rd.ipaddr.name,
+		Position:     41,
+		Exclusive:    true,
+		MaxInstances: support.MinHandlerInstances,
+		Transforms:   []string{string(oam.IPNetRecord)},
+		EventType:    oam.IPAddress,
+		Callback:     rd.ipaddr.check,
+	}); err != nil {
+		return err
+	}
+
 	rd.ipnet = &ipnet{
 		name:   rd.name + "-IPNetwork-Handler",
 		plugin: rd,
@@ -244,7 +262,8 @@ func (rd *rdapPlugin) storeEntity(e *et.Event, level int, entity *rdap.Entity, a
 			s := strings.Join(label, " ")
 
 			addr := strings.Join(strings.Split(s, "\n"), " ")
-			if loc := support.StreetAddressToLocation(addr); loc != nil {
+			// a care-of or mail-drop address is not the contact's own
+			if loc := support.StreetAddressToLocation(addr); loc != nil && !support.IsCareOfOrMailDrop(addr) {
 				if a, err := e.Session.DB().CreateAsset(ctx, loc); err == nil && a != nil {
 					_ = rd.createContactEdge(ctx, e.Session, cr, a, &general.SimpleRelation{Name: "location"}, src)
 				}
@@ -299,7 +318,9 @@ func (rd *rdapPlugin) storeEntity(e *et.Event, level int, entity *rdap.Entity, a
 				})
 			}
 		}
-	} else if m.IsMatch(string(oam.Organization)) && kind == "org" {
+	} else if m.IsMatch(string(oam.Organization)) && kind == "org" &&
+		!support.IsGenericName(name) && !support.IsCareOfOrMailDrop(name) {
+		// a role, placeholder or care-of name is not an organization
 		orgent, err := org.FindOrgByRDAPHandle(e.Session, entity.Handle, src)
 		if err != nil || orgent == nil {
 			orgent, err = org.CreateOrgAsset(e.Session, cr,

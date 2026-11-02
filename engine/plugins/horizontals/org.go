@@ -12,9 +12,7 @@ import (
 	"github.com/owasp-amass/amass/v5/engine/plugins/support"
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	oam "github.com/owasp-amass/open-asset-model"
-	oamcert "github.com/owasp-amass/open-asset-model/certificate"
 	oamorg "github.com/owasp-amass/open-asset-model/org"
-	oamreg "github.com/owasp-amass/open-asset-model/registration"
 )
 
 type horOrg struct {
@@ -75,40 +73,7 @@ func (h *horOrg) processInScope(e *et.Event) {
 		if from.Asset.AssetType() != oam.ContactRecord {
 			continue
 		}
-		// add the contact record orgs and locations to the scope
-		if orgs, locs := h.plugin.lookupContactRecordOrgsAndLocations(e.Session, from); len(orgs) > 0 || len(locs) > 0 {
-			for _, o := range orgs {
-				h.plugin.enqueueIfOutOfScope(e.Session, o)
-			}
-			for _, loc := range locs {
-				h.plugin.enqueueIfOutOfScope(e.Session, loc)
-			}
-		}
-		// if the contact record belongs to a registration record or TLS certificate, add to the scope
-		if edges, err := e.Session.DB().IncomingEdges(ctx, from, since); err == nil {
-			for _, edge := range edges {
-				if from, err := e.Session.DB().FindEntityById(ctx, edge.FromEntity.ID); err == nil {
-					switch v := from.Asset.(type) {
-					case *oamreg.AutnumRecord:
-						if !h.plugin.isEntityInScope(e.Session, from) {
-							if as := h.plugin.addASNetblocksToScope(e.Session, v.Number); as != nil {
-								h.plugin.addToScopeAndEnqueue(e.Session, as)
-							}
-						}
-					case *oamreg.DomainRecord:
-						if fqdn, err := h.plugin.getRegisteredDomainEntity(e.Session, from); err == nil && fqdn != nil {
-							h.plugin.enqueueIfOutOfScope(e.Session, fqdn)
-						}
-					case *oamreg.IPNetRecord:
-						if nb, err := h.plugin.getRegisteredNetblockEntity(e.Session, from); err == nil && nb != nil {
-							h.plugin.enqueueIfOutOfScope(e.Session, nb)
-						}
-					case *oamcert.TLSCertificate:
-						h.plugin.enqueueCertificateDomain(e.Session, from)
-					}
-				}
-			}
-		}
+		h.plugin.expandFromContactRecord(e.Session, from, e.Entity, "organization", since)
 	}
 }
 
@@ -123,7 +88,7 @@ func (h *horOrg) processOutOfScope(e *et.Event) {
 
 	for _, assoc := range assocs {
 		if assoc.ScopeChange {
-			e.Session.Log().Info(assoc.Rationale)
+			e.Session.Log().Info(assoc.Rationale, "via", "association", "distance", associationDistance(e.Session, assoc))
 		}
 	}
 }

@@ -95,3 +95,25 @@ func TestHasPlaceholdersAnyField(t *testing.T) {
 		t.Error("Crayon AS contact: want genuine")
 	}
 }
+
+// Per-domain stand-ins and masking text seen in the testing database.
+func TestDetectProxyAndMaskingPhrases(t *testing.T) {
+	for _, v := range []string{
+		"Registrant of 10-4soumissions.com",
+		"Admin of bizcehost.com",
+		"Technical Contact of example.co.uk",
+		"ORGANIZATION NAME MASKED",
+		"Statutory Masking Enabled",
+		"Pending renewal or deletion",
+		"Confiscated for abuse or non-payment, Bluehost holding account",
+	} {
+		if d := DetectRegistrantPlaceholder(v); !d.IsPlaceholder {
+			t.Errorf("%q: want placeholder, got score %d (%v)", v, d.Score, d.Matches)
+		}
+	}
+	for _, v := range []string{"Registrant Services Ltd", "Admin of the Year Awards", "Masked Singer Productions"} {
+		if d := DetectRegistrantPlaceholder(v); d.IsPlaceholder {
+			t.Errorf("%q: want genuine, got score %d (%v)", v, d.Score, d.Matches)
+		}
+	}
+}

@@ -138,7 +138,7 @@ func TestCertificateQueuesItsRegisteredDomain(t *testing.T) {
 	})
 
 	h := NewHorizontals().(*horizPlugin)
-	h.enqueueCertificateDomain(sess, cert)
+	h.enqueueCertificateDomain(sess, cert, nil, "certificate")
 
 	if !sess.scope.has(&oamdns.FQDN{Name: "sub-co.com"}) {
 		t.Fatal("sub-co.com: want in scope")

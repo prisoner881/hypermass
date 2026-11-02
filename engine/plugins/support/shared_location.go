@@ -29,7 +29,8 @@ import (
 const MaxRecordsPerLocation = 25
 
 var (
-	// location entity ID -> record count, for locations found to be shared.
+	// database + location entity ID -> record count, for locations found to
+	// be shared (entityCacheKey).
 	// A shared verdict never needs re-checking: records are only ever added
 	// to the database, so the count can only grow. Locations under the cap
 	// are not cached and are counted again on the next check, since they
@@ -59,10 +60,18 @@ func IsSharedLocation(sess et.Session, loc *dbt.Entity) (bool, int) {
 	if loc == nil {
 		return false, 0
 	}
-	if _, ok := loc.Asset.(*oamcon.Location); !ok {
+	l, ok := loc.Asset.(*oamcon.Location)
+	if !ok {
 		return false, 0
 	}
-	if v, ok := sharedLocations.Load(loc.ID); ok {
+	// A care-of or mail-drop address says in its own text that it is someone
+	// else's (a registered agent's, a mail drop's): shared, with no need to
+	// count records, so it holds on an empty database too. Reported with a
+	// record count of -1.
+	if IsCareOfOrMailDrop(l.Address) {
+		return true, -1
+	}
+	if v, ok := sharedLocations.Load(entityCacheKey(sess, loc.ID)); ok {
 		return true, v.(int)
 	}
 
@@ -97,7 +106,7 @@ func IsSharedLocation(sess et.Session, loc *dbt.Entity) (bool, int) {
 	if n > MaxRecordsPerLocation {
 		// the verdict holds for every variant of the address
 		for _, v := range variants {
-			sharedLocations.Store(v.ID, n)
+			sharedLocations.Store(entityCacheKey(sess, v.ID), n)
 		}
 		return true, n
 	}
@@ -147,9 +156,14 @@ func SkipSharedLocation(sess et.Session, loc *dbt.Entity, plugin string) bool {
 
 	key := sess.ID().String() + "|" + loc.ID
 	if _, logged := sharedLocationsLogged.LoadOrStore(key, struct{}{}); !logged {
-		sess.Log().Info("skipping location: shared address (likely a privacy proxy, registered agent or host)",
-			"address", loc.Asset.Key(), "records", n, "max_records", MaxRecordsPerLocation,
-			slog.Group("plugin", "name", plugin))
+		if n < 0 {
+			sess.Log().Info("skipping location: care-of or mail-drop address",
+				"address", loc.Asset.Key(), slog.Group("plugin", "name", plugin))
+		} else {
+			sess.Log().Info("skipping location: shared address (likely a privacy proxy, registered agent or host)",
+				"address", loc.Asset.Key(), "records", n, "max_records", MaxRecordsPerLocation,
+				slog.Group("plugin", "name", plugin))
+		}
 	}
 	return true
 }

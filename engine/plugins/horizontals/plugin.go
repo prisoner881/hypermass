@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -406,17 +407,18 @@ func (h *horizPlugin) getOrganizationLocations(sess et.Session, o *dbt.Entity) (
 	return results, nil
 }
 
-// maxAnnouncedNetblocksForScope bounds the ASN netblock fan-out in
-// addASNetblocksToScope. An autonomous system that announces more than this
-// many netblocks is treated as shared infrastructure (a CDN, cloud or SaaS
-// provider such as Cloudflare, Google, AWS or Fastly) rather than a
-// target-owned ASN, and its announced space is not admitted to scope. A
-// target that runs its own ASN announces far fewer blocks than a provider,
-// so this cleanly separates the two; it is deliberately conservative because
-// admitting a provider's entire space and port-scanning it is far worse than
-// missing a few associative blocks, which still reach scope via the
-// ownership path. Tunable.
-const maxAnnouncedNetblocksForScope = 16
+// maxAnnouncedNetblocksForScope is a backstop for the ASN netblock fan-out
+// in addASNetblocksToScope: an autonomous system announcing more netblocks
+// than this is treated as shared infrastructure (a cloud or CDN provider)
+// and does not enter scope at all. Which ASNs reach the fan-out is decided
+// by their registration (horizontals only follows an ASN whose registrant
+// is in scope, and declines one whose registration names another
+// organization), so this only has to catch the very largest providers. The
+// previous limit of 16 also caught companies that run their own networks
+// (American Express, Bank of America, General Motors and Eli Lilly each
+// announce 80-120), so their own ASN never brought its blocks into scope.
+// Tunable.
+const maxAnnouncedNetblocksForScope = 500
 
 // isSharedInfrastructureASN reports whether an autonomous system that
 // announces announcedNetblocks blocks should be treated as shared
@@ -425,6 +427,9 @@ func isSharedInfrastructureASN(announcedNetblocks int) bool {
 	return announcedNetblocks > maxAnnouncedNetblocksForScope
 }
 
+// addASNetblocksToScope admits the small netblocks the autonomous system
+// announces and returns its entity for the caller to add to scope, or nil
+// when the AS is shared infrastructure, which must not enter scope at all.
 func (h *horizPlugin) addASNetblocksToScope(sess et.Session, asn int) *dbt.Entity {
 	ctx, cancel := context.WithTimeout(sess.Ctx(), 10*time.Second)
 	defer cancel()
@@ -453,10 +458,15 @@ func (h *horizPlugin) addASNetblocksToScope(sess et.Session, asn int) *dbt.Entit
 		// fan-out, so bound it here. Blocks the target genuinely owns still
 		// reach scope at any size via the ownership path
 		// (support.AdmitOwnedNetblock, gated on RDAP contact attribution).
+		// A shared ASN does not enter scope, not even the AS itself: an AS
+		// in scope makes its registration record's registrant count as the
+		// target's. In observe and off modes the previous behavior holds:
+		// the AS is returned, but its announced blocks are not admitted.
 		if isSharedInfrastructureASN(len(edges)) {
-			sess.Log().Info("skipping ASN netblock admission: likely shared infrastructure",
-				"asn", asn, "announced_netblocks", len(edges),
-				slog.Group("plugin", "name", h.name))
+			if support.Decline(sess, support.VetoSharedASN, string(oam.AutonomousSystem), "AS"+strconv.Itoa(asn), h.name,
+				"announced_netblocks", len(edges), "max_announced_netblocks", maxAnnouncedNetblocksForScope) {
+				return nil
+			}
 			return as
 		}
 
@@ -474,7 +484,7 @@ func (h *horizPlugin) addASNetblocksToScope(sess et.Session, asn int) *dbt.Entit
 			// ambient netblock path does; larger or genuinely-owned blocks
 			// come through the ownership path instead.
 			if nb, ok := to.Asset.(*oamnet.Netblock); ok && support.PrefixEligibleForAmbientAdmit(nb.CIDR) {
-				h.enqueueIfOutOfScope(sess, to)
+				h.enqueueIfOutOfScope(sess, to, as, "announced by an in-scope ASN")
 			}
 		}
 	}
@@ -509,12 +519,23 @@ func (h *horizPlugin) isEntityInScope(sess et.Session, ent *dbt.Entity) bool {
 	return false
 }
 
-func (h *horizPlugin) addToScopeAndEnqueue(sess et.Session, ent *dbt.Entity) {
+// addToScopeAndEnqueue adds the asset to scope because of the in-scope
+// asset from (nil when unknown), via the named kind of evidence, and logs
+// it with its distance from the seeds (-1 when unknown).
+func (h *horizPlugin) addToScopeAndEnqueue(sess et.Session, ent, from *dbt.Entity, via string) {
 	if sess.Scope().Add(ent.Asset) {
 		// The TLS certificate and registration record handlers add assets
 		// here without an association rationale, so record each one.
+		var fromAsset oam.Asset
+		fromName := ""
+		if from != nil {
+			fromAsset = from.Asset
+			fromName = string(from.Asset.AssetType()) + ": " + from.Asset.Key()
+		}
+		distance := support.RecordScopeAddition(sess, ent.Asset, fromAsset)
 		sess.Log().Info("asset added to the session scope by horizontals",
 			"type", string(ent.Asset.AssetType()), "asset", ent.Asset.Key(),
+			"via", via, "from", fromName, "distance", distance,
 			slog.Group("plugin", "name", h.name))
 		if econf := h.confidence(sess, ent.Asset.AssetType()); econf > 0 {
 			if a, conf := sess.Scope().IsAssetInScope(ent.Asset, econf); conf >= econf {
@@ -526,9 +547,84 @@ func (h *horizPlugin) addToScopeAndEnqueue(sess et.Session, ent *dbt.Entity) {
 	}
 }
 
-func (h *horizPlugin) enqueueIfOutOfScope(sess et.Session, ent *dbt.Entity) {
+func (h *horizPlugin) enqueueIfOutOfScope(sess et.Session, ent, from *dbt.Entity, via string) {
 	if !h.isEntityInScope(sess, ent) {
-		h.addToScopeAndEnqueue(sess, ent)
+		h.addToScopeAndEnqueue(sess, ent, from, via)
+	}
+}
+
+// associationDistance records an addition made by scope association and
+// returns its distance from the seeds.
+func associationDistance(sess et.Session, assoc *et.Association) int {
+	if assoc == nil || assoc.Submission == nil {
+		return -1
+	}
+	var from oam.Asset
+	if assoc.BestMatch != nil {
+		from = assoc.BestMatch.Asset
+	}
+	return support.RecordScopeAddition(sess, assoc.Submission.Asset, from)
+}
+
+// expandFromContactRecord adds to scope what a contact record using the
+// in-scope location or organization from leads to: the record's other
+// organizations and locations, and the domain, netblock, autonomous system
+// or certificate domain it is a contact for. Registrations naming another
+// organization, and merged certificates, are declined.
+func (h *horizPlugin) expandFromContactRecord(sess et.Session, cr, from *dbt.Entity, via string, since time.Time) {
+	// add the contact record orgs and locations to the scope
+	if orgs, locs := h.lookupContactRecordOrgsAndLocations(sess, cr); len(orgs) > 0 || len(locs) > 0 {
+		for _, o := range orgs {
+			h.enqueueIfOutOfScope(sess, o, from, via)
+		}
+		for _, loc := range locs {
+			h.enqueueIfOutOfScope(sess, loc, from, via)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(sess.Ctx(), time.Minute)
+	defer cancel()
+
+	// if the contact record belongs to a registration record or TLS certificate, add to the scope
+	edges, err := sess.DB().IncomingEdges(ctx, cr, since)
+	if err != nil {
+		return
+	}
+	for _, edge := range edges {
+		rec, err := sess.DB().FindEntityById(ctx, edge.FromEntity.ID)
+		if err != nil {
+			continue
+		}
+		switch v := rec.Asset.(type) {
+		case *oamreg.AutnumRecord:
+			if !h.isEntityInScope(sess, rec) &&
+				!support.IsSeedAsset(sess, &oamnet.AutonomousSystem{Number: v.Number}) &&
+				support.DeclineForeignRegistration(sess, rec, h.name) {
+				continue
+			}
+			if !h.isEntityInScope(sess, rec) {
+				if as := h.addASNetblocksToScope(sess, v.Number); as != nil {
+					h.addToScopeAndEnqueue(sess, as, from, via)
+				}
+			}
+		case *oamreg.DomainRecord:
+			if fqdn, err := h.getRegisteredDomainEntity(sess, rec); err == nil && fqdn != nil {
+				h.enqueueIfOutOfScope(sess, fqdn, from, via)
+			}
+		case *oamreg.IPNetRecord:
+			nb, err := h.getRegisteredNetblockEntity(sess, rec)
+			if err != nil || nb == nil || h.isEntityInScope(sess, nb) {
+				continue
+			}
+			if !support.IsSeedAsset(sess, nb.Asset) && support.DeclineForeignRegistration(sess, rec, h.name) {
+				continue
+			}
+			h.enqueueIfOutOfScope(sess, nb, from, via)
+		case *oamcert.TLSCertificate:
+			if !support.DeclineMergedCertificate(sess, rec, h.name) {
+				h.enqueueCertificateDomain(sess, rec, from, via)
+			}
+		}
 	}
 }
 
@@ -538,7 +634,7 @@ func (h *horizPlugin) enqueueIfOutOfScope(sess et.Session, ent *dbt.Entity) {
 // can be added to scope, so adding the certificate itself did nothing for
 // most certificates. Falls back to the certificate when the domain's FQDN
 // is not in the database.
-func (h *horizPlugin) enqueueCertificateDomain(sess et.Session, cert *dbt.Entity) {
+func (h *horizPlugin) enqueueCertificateDomain(sess et.Session, cert, from *dbt.Entity, via string) {
 	c, ok := cert.Asset.(*oamcert.TLSCertificate)
 	if !ok {
 		return
@@ -552,12 +648,12 @@ func (h *horizPlugin) enqueueCertificateDomain(sess et.Session, cert *dbt.Entity
 		if ents, err := sess.DB().FindEntitiesByContent(ctx, oam.FQDN, time.Time{}, 1, dbt.ContentFilters{
 			"name": dom,
 		}); err == nil && len(ents) == 1 {
-			h.enqueueIfOutOfScope(sess, ents[0])
+			h.enqueueIfOutOfScope(sess, ents[0], from, via)
 			return
 		}
 	}
 
-	h.enqueueIfOutOfScope(sess, cert)
+	h.enqueueIfOutOfScope(sess, cert, from, via)
 }
 
 func (h *horizPlugin) getRegisteredDomainEntity(sess et.Session, record *dbt.Entity) (*dbt.Entity, error) {

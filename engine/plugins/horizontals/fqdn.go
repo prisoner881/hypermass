@@ -39,7 +39,7 @@ func (h *horfqdn) check(e *et.Event) error {
 	if assocs := h.lookup(e, e.Entity); len(assocs) > 0 {
 		for _, assoc := range assocs {
 			if assoc.ScopeChange {
-				e.Session.Log().Info(assoc.Rationale)
+				e.Session.Log().Info(assoc.Rationale, "via", "association", "distance", associationDistance(e.Session, assoc))
 			}
 		}
 	}

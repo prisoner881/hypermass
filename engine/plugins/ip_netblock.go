@@ -162,7 +162,17 @@ func (d *ipNetblock) store(e *et.Event, entry *sessions.CIDRangerEntry) (*dbt.En
 	// that an out-of-scope link or CNAME target resolved into. Its RDAP
 	// registrant organization then counted as in scope for horizontals,
 	// which pulled in that organization's own domains.
-	if support.PrefixEligibleForAmbientAdmit(netblock.CIDR) && support.HasInScopeFQDN(ctx, e.Session, e.Entity) {
+	//
+	// Resolution alone no longer admits a block, however small. An in-scope
+	// name resolving into a block makes the target a tenant there; whether
+	// the target owns the block is decided by its registration, which RDAP
+	// fetches for every netblock: AdmitOwnedNetblock (contact email on a
+	// seed domain) and horizontals (registrant in scope). The target's own
+	// IPs in the block are still authorized one at a time (dns/ip.go). In
+	// observe mode the block is still admitted here, and the decision logged.
+	if support.PrefixEligibleForAmbientAdmit(netblock.CIDR) && support.HasInScopeFQDN(ctx, e.Session, e.Entity) &&
+		!support.Decline(e.Session, support.VetoResolutionOnly, string(oam.Netblock), netblock.CIDR.String(), d.name,
+			"asn", entry.ASN) {
 		e.Session.Scope().Add(netblock)
 	}
 	support.AdmitOwnedNetblock(e, nb)

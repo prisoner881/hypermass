@@ -86,6 +86,11 @@ func DetectRegistrantPlaceholder(value string) PrivacyDetection {
 		"domain privacy service":       "DOMAIN_PRIVACY_SERVICE",
 		"identity protected":           "IDENTITY_PROTECTED",
 		"identity protection service":  "IDENTITY_PROTECTION_SERVICE",
+		"statutory masking":            "STATUTORY_MASKING",
+		"name masked":                  "NAME_MASKED",
+		"organization masked":          "ORGANIZATION_MASKED",
+		"pending renewal or deletion":  "PENDING_RENEWAL_OR_DELETION",
+		"confiscated for abuse":        "CONFISCATED_FOR_ABUSE",
 		"whoisproxy":                   "WHOISPROXY",
 		"domainsbyproxy":               "DOMAINS_BY_PROXY",
 	}
@@ -160,6 +165,12 @@ func DetectRegistrantPlaceholder(value string) PrivacyDetection {
 	// and others): the proxy names the domain in place of its owner. Every
 	// such record is unique per domain, so organization matching alone
 	// would never catch it, yet each one sits at the proxy's shared address.
+	// "Registrant of example.com", "Admin of example.com": the same per-domain
+	// stand-in, used by other privacy services.
+	if roleOfDomainRE.MatchString(n) {
+		add(12, "ROLE_OF_DOMAIN", roleOfDomainRE.String())
+	}
+
 	if onBehalfOfDomainRE.MatchString(n) {
 		add(12, "ON_BEHALF_OF_DOMAIN", onBehalfOfDomainRE.String())
 	}
@@ -203,6 +214,7 @@ var (
 	onBehalfOfDomainRE = regexp.MustCompile(`^on behalf of [a-z0-9][a-z0-9-]*(\.[a-z0-9-]+)+( [a-z]+){0,3}$`)
 	emailRE            = regexp.MustCompile(`([a-z0-9._+-]+)@([a-z0-9-]+(?:\.[a-z0-9-]+)+)`)
 	hashedMailboxRE    = regexp.MustCompile(`^[0-9a-f]{32,}$`)
+	roleOfDomainRE     = regexp.MustCompile(`^(registrant|owner|admin|administrator|administrative|tech|technical|billing)( contact)? of [a-z0-9][a-z0-9-]*(\.[a-z0-9-]+)+$`)
 )
 
 // privacyMailDomains are mail domains used only by WHOIS privacy/proxy

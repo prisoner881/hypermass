@@ -35,6 +35,13 @@ options:
   # goes through it regardless of this flag. The proxy is checked when the
   # session starts; a run is refused if it is down.
   # active_strict: true
+  # Scope-expansion vetoes: what the engine does with evidence that an asset
+  # about to join the scope belongs to someone else (a netblock a target name
+  # merely resolves into, a netblock or ASN registered to another
+  # organization, a certificate that merges unrelated ones). "enforce" (the
+  # default) declines it, "observe" adds it as before but logs it, "off"
+  # skips the checks. Each decision is logged as "scope decision".
+  # scope_vetoes: enforce
   bruteforce:
     enabled: false
     wordlists: # wordlist(s) to use that are specific to brute forcing

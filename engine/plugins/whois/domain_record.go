@@ -233,6 +233,16 @@ func (r *domrec) storeContact(e *et.Event, c *domrecContact, dr *dbt.Entity, m *
 
 	var found bool
 	wc := c.WhoisContact
+	// A care-of or mail-drop address ("c/o The Corporation Trust Company",
+	// "PMB# 255") is a registered agent's or mail drop's, not the
+	// registrant's: it is not linked, so it cannot tie this registrant to the
+	// agent's other clients. The organization and email beside it are kept,
+	// unless the organization field is itself care-of text.
+	orgCareOf := support.IsCareOfOrMailDrop(wc.Organization)
+	addrCareOf := orgCareOf || support.IsCareOfOrMailDrop(wc.Street)
+	if orgCareOf {
+		wc.Organization = ""
+	}
 	// test if the address begins in the organization field
 	addr := fmt.Sprintf("%s %s %s %s %s %s",
 		wc.Organization, wc.Street, wc.City, wc.Province, wc.PostalCode, wc.Country)
@@ -241,7 +251,7 @@ func (r *domrec) storeContact(e *et.Event, c *domrecContact, dr *dbt.Entity, m *
 		found = true
 		addr = fmt.Sprintf("%s %s %s %s %s",
 			wc.Street, wc.City, wc.Province, wc.PostalCode, wc.Country)
-	} else if !support.IsGenericName(wc.Name) {
+	} else if !support.IsGenericName(wc.Name) && !support.IsCareOfOrMailDrop(wc.Name) {
 		wc.Organization = wc.Name
 	}
 	// A role name ("Domain Administrator", "Hostmaster") is a job, not an
@@ -261,7 +271,7 @@ func (r *domrec) storeContact(e *et.Event, c *domrecContact, dr *dbt.Entity, m *
 		}
 	}
 
-	if loc := support.StreetAddressToLocation(addr); loc != nil {
+	if loc := support.StreetAddressToLocation(addr); loc != nil && !addrCareOf {
 		if a, err := e.Session.DB().CreateAsset(ctx, loc); err == nil && a != nil {
 			r.createSimpleEdge(e.Session, &general.SimpleRelation{Name: "location"}, cr, a)
 		}

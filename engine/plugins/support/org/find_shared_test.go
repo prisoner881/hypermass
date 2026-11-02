@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/owasp-amass/amass/v5/config"
 	"github.com/owasp-amass/amass/v5/engine/plugins/support"
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	assetdb "github.com/owasp-amass/asset-db"
@@ -34,6 +35,11 @@ func (s *findTestSession) ID() uuid.UUID             { return s.id }
 func (s *findTestSession) Ctx() context.Context      { return context.Background() }
 func (s *findTestSession) Log() *slog.Logger         { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 func (s *findTestSession) DB() repository.Repository { return s.db }
+func (s *findTestSession) Config() *config.Config {
+	cfg := config.NewConfig()
+	cfg.GraphDBs = []*config.Database{{System: "sqlite", Primary: true, DBName: s.id.String()}}
+	return cfg
+}
 
 // The crayon.co incident: a new contact record at the whoisproxy.com address
 // was merged with "On behalf of kitche.co owner", another domain's record at

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/owasp-amass/amass/v5/engine/plugins/support"
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	dbt "github.com/owasp-amass/asset-db/types"
 	oam "github.com/owasp-amass/open-asset-model"
@@ -33,6 +34,13 @@ func (h *horTlsCert) check(e *et.Event) error {
 
 	// check if scope expansion is allowed
 	if e.Session.Config().Rigid {
+		return nil
+	}
+
+	// A certificate that merges unrelated certificates (a serial number
+	// reused by default and self-signed certificates) names many unrelated
+	// organizations: it says nothing about who owns its common name.
+	if support.DeclineMergedCertificate(e.Session, e.Entity, h.plugin.name) {
 		return nil
 	}
 
@@ -62,22 +70,22 @@ func (h *horTlsCert) process(e *et.Event, c *oamcert.TLSCertificate, orgs []*dbt
 		return
 	}
 
-	var found bool
+	var match *dbt.Entity
 	for _, o := range orgs {
 		if h.plugin.isEntityInScope(e.Session, o) {
-			found = true
+			match = o
 			break
 		}
 	}
 
-	if found {
+	if match != nil {
 		// the TLS certificate subject common name and related
 		// organizations should be added to the scope and reviewed
 		if fqdn := h.registeredFQDN(e.Session, c); fqdn != nil {
-			h.plugin.enqueueIfOutOfScope(e.Session, fqdn)
+			h.plugin.enqueueIfOutOfScope(e.Session, fqdn, match, "certificate")
 		}
 		for _, o := range orgs {
-			h.plugin.enqueueIfOutOfScope(e.Session, o)
+			h.plugin.enqueueIfOutOfScope(e.Session, o, match, "certificate")
 		}
 	}
 }

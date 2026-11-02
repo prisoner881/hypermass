@@ -26,6 +26,12 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
+// SkipAssociationEvidence, when set, reports whether an asset must not
+// serve as evidence of association (a certificate that merges unrelated
+// certificates, for example). The plugins' support package sets it: this
+// package cannot import that one.
+var SkipAssociationEvidence func(sess et.Session, ent *dbt.Entity) bool
+
 func (s *Scope) IsAssociated(req *et.Association) ([]*et.Association, error) {
 	if req == nil || req.Submission == nil || req.Submission.Asset == nil {
 		return nil, errors.New("invalid request")
@@ -202,6 +208,9 @@ func (s *Scope) AssetsWithAssociation(asset *dbt.Entity) []*dbt.Entity {
 				results = append(results, a)
 			case *oamcert.TLSCertificate:
 				found = true
+				if SkipAssociationEvidence != nil && SkipAssociationEvidence(s.Session, a) {
+					break
+				}
 				ctx, cancel := context.WithTimeout(s.Session.Ctx(), 10*time.Second)
 				defer cancel()
 

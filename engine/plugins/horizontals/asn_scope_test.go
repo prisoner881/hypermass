@@ -11,9 +11,10 @@ import (
 	"github.com/owasp-amass/amass/v5/engine/plugins/support"
 )
 
-// An ASN that announces more than the cap is treated as shared infrastructure
-// (a CDN, cloud or SaaS provider), and its announced space is not admitted to
-// scope. A target that runs its own ASN announces far fewer blocks.
+// An ASN announcing more than the backstop count is treated as shared
+// infrastructure. Companies that run their own networks announce far fewer
+// (American Express 119, Bank of America 98), so their ASN still brings its
+// blocks into scope; the previous limit of 16 caught them.
 func TestIsSharedInfrastructureASN(t *testing.T) {
 	cases := []struct {
 		announced int
@@ -21,9 +22,11 @@ func TestIsSharedInfrastructureASN(t *testing.T) {
 	}{
 		{0, false},
 		{3, false},
+		{17, false},
+		{119, false}, // American Express
 		{maxAnnouncedNetblocksForScope, false},
 		{maxAnnouncedNetblocksForScope + 1, true},
-		{500, true}, // a provider such as Cloudflare announces hundreds
+		{4684, true}, // Amazon, in the testing database
 	}
 	for _, c := range cases {
 		if got := isSharedInfrastructureASN(c.announced); got != c.shared {

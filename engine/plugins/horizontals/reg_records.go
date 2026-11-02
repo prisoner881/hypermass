@@ -14,6 +14,7 @@ import (
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	dbt "github.com/owasp-amass/asset-db/types"
 	oam "github.com/owasp-amass/open-asset-model"
+	oamnet "github.com/owasp-amass/open-asset-model/network"
 	oamreg "github.com/owasp-amass/open-asset-model/registration"
 )
 
@@ -67,156 +68,133 @@ func (h *horRegRec) check(e *et.Event) error {
 	return nil
 }
 
+// firstInScope returns the first of the registrant's organizations, then
+// locations, that is in scope, or nil.
+func (h *horRegRec) firstInScope(sess et.Session, orgs, locs []*dbt.Entity) *dbt.Entity {
+	for _, o := range orgs {
+		if h.plugin.isEntityInScope(sess, o) {
+			return o
+		}
+	}
+	for _, loc := range locs {
+		if h.plugin.isEntityInScope(sess, loc) {
+			return loc
+		}
+	}
+	return nil
+}
+
+// expand adds the registrant's organizations and locations to scope.
+func (h *horRegRec) expand(sess et.Session, from *dbt.Entity, via string, orgs, locs []*dbt.Entity) {
+	for _, o := range orgs {
+		h.plugin.enqueueIfOutOfScope(sess, o, from, via)
+	}
+	for _, loc := range locs {
+		h.plugin.enqueueIfOutOfScope(sess, loc, from, via)
+	}
+}
+
+// declineForeign reports whether the registration record (an AutnumRecord
+// or IPNetRecord) names another organization, so that what it registers must
+// not be admitted and its registrant must not be expanded. Records for what
+// the operator seeded are never declined.
+func (h *horRegRec) declineForeign(e *et.Event) bool {
+	switch v := e.Entity.Asset.(type) {
+	case *oamreg.AutnumRecord:
+		if support.IsSeedAsset(e.Session, &oamnet.AutonomousSystem{Number: v.Number}) {
+			return false
+		}
+	case *oamreg.IPNetRecord:
+		if support.IsSeedAsset(e.Session, &oamnet.Netblock{CIDR: v.CIDR, Type: v.Type}) {
+			return false
+		}
+	}
+	return support.DeclineForeignRegistration(e.Session, e.Entity, h.plugin.name)
+}
+
 func (h *horRegRec) processAutnumRecord(e *et.Event, orgs []*dbt.Entity, locs []*dbt.Entity) {
 	// check if the autnum record / registered autonomous system is in scope
 	if h.plugin.isEntityInScope(e.Session, e.Entity) {
-		for _, o := range orgs {
-			h.plugin.enqueueIfOutOfScope(e.Session, o)
-		}
-		for _, loc := range locs {
-			h.plugin.enqueueIfOutOfScope(e.Session, loc)
+		if !h.declineForeign(e) {
+			h.expand(e.Session, e.Entity, "registration record", orgs, locs)
 		}
 		return
 	}
 
-	var found bool
-	for _, o := range orgs {
-		if h.plugin.isEntityInScope(e.Session, o) {
-			found = true
-			break
-		}
+	match := h.firstInScope(e.Session, orgs, locs)
+	if match == nil || h.declineForeign(e) {
+		return
 	}
 
-	if !found {
-		for _, loc := range locs {
-			if h.plugin.isEntityInScope(e.Session, loc) {
-				found = true
-				break
-			}
+	// the autonomous system should be added to the scope
+	if an, valid := e.Entity.Asset.(*oamreg.AutnumRecord); valid {
+		if as := h.plugin.addASNetblocksToScope(e.Session, an.Number); as != nil {
+			h.plugin.addToScopeAndEnqueue(e.Session, as, match, "registrant match")
 		}
 	}
-
-	if found {
-		// the autonomous system should be added to the scope
-		if an, valid := e.Entity.Asset.(*oamreg.AutnumRecord); valid {
-			if !h.plugin.isEntityInScope(e.Session, e.Entity) {
-				if as := h.plugin.addASNetblocksToScope(e.Session, an.Number); as != nil {
-					h.plugin.addToScopeAndEnqueue(e.Session, as)
-				}
-			}
-		}
-		for _, o := range orgs {
-			h.plugin.enqueueIfOutOfScope(e.Session, o)
-		}
-		for _, loc := range locs {
-			h.plugin.enqueueIfOutOfScope(e.Session, loc)
-		}
-	}
+	h.expand(e.Session, match, "registrant match", orgs, locs)
 }
 
 func (h *horRegRec) processDomainRecord(e *et.Event, orgs []*dbt.Entity, locs []*dbt.Entity) {
 	// check if the domain record / registered domain name is in scope
 	if h.plugin.isEntityInScope(e.Session, e.Entity) {
-		for _, o := range orgs {
-			h.plugin.enqueueIfOutOfScope(e.Session, o)
-		}
-		for _, loc := range locs {
-			h.plugin.enqueueIfOutOfScope(e.Session, loc)
-		}
+		h.expand(e.Session, e.Entity, "registration record", orgs, locs)
 		return
 	}
 
-	var found bool
-	for _, o := range orgs {
-		if h.plugin.isEntityInScope(e.Session, o) {
-			found = true
-			break
-		}
+	match := h.firstInScope(e.Session, orgs, locs)
+	if match == nil {
+		return
 	}
 
-	if !found {
-		for _, loc := range locs {
-			if h.plugin.isEntityInScope(e.Session, loc) {
-				found = true
-				break
-			}
-		}
+	// get the registered domain FQDN entity
+	if fqdn, err := h.plugin.getRegisteredDomainEntity(e.Session, e.Entity); err == nil && fqdn != nil {
+		// add the FQDN to the session scope and review it: queue the domain
+		// name itself, not the registration record, so the work done only
+		// for in-scope names (subdomain discovery) runs on it
+		h.plugin.enqueueIfOutOfScope(e.Session, fqdn, match, "registrant match")
 	}
-
-	if found {
-		// get the registered domain FQDN entity
-		if fqdn, err := h.plugin.getRegisteredDomainEntity(e.Session, e.Entity); err == nil && fqdn != nil {
-			// add the FQDN to the session scope and review it: queue the
-			// domain name itself, not the registration record, so the work
-			// done only for in-scope names (subdomain discovery) runs on it
-			h.plugin.enqueueIfOutOfScope(e.Session, fqdn)
-		}
-		for _, o := range orgs {
-			h.plugin.enqueueIfOutOfScope(e.Session, o)
-		}
-		for _, loc := range locs {
-			h.plugin.enqueueIfOutOfScope(e.Session, loc)
-		}
-	}
+	h.expand(e.Session, match, "registrant match", orgs, locs)
 }
 
 func (h *horRegRec) processIPNetRecord(e *et.Event, orgs []*dbt.Entity, locs []*dbt.Entity) {
-	// A netblock in scope does not make its registrant the target. The
-	// ambient path admits a provider's small block when only the target's
-	// hosts sit on it (an in-scope name resolves into a Salesforce, CDN or
-	// cloud range), which makes the target a tenant there, not the owner.
-	// So an in-scope record expands to its registrant's organizations and
-	// locations only when the block is attributed to the target: an RDAP
-	// contact email on a seed domain. Otherwise it is handled like an
-	// out-of-scope record below, and expands only when its registrant is
-	// already known to be in scope.
+	// A netblock in scope does not make its registrant the target. A block
+	// can be in scope only because the target's hosts sit on it, which makes
+	// the target a tenant there, not the owner. So an in-scope record expands
+	// to its registrant's organizations and locations only when the block is
+	// attributed to the target: an RDAP contact email on a seed domain.
+	// Otherwise it is handled like an out-of-scope record below, and expands
+	// only when its registrant is already known to be in scope.
 	inScope := h.plugin.isEntityInScope(e.Session, e.Entity)
 	if inScope && h.ownedBySeed(e) {
-		for _, o := range orgs {
-			h.plugin.enqueueIfOutOfScope(e.Session, o)
-		}
-		for _, loc := range locs {
-			h.plugin.enqueueIfOutOfScope(e.Session, loc)
-		}
+		h.expand(e.Session, e.Entity, "registration record", orgs, locs)
 		return
 	}
 
-	var found bool
-	for _, o := range orgs {
-		if h.plugin.isEntityInScope(e.Session, o) {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		for _, loc := range locs {
-			if h.plugin.isEntityInScope(e.Session, loc) {
-				found = true
-				break
+	match := h.firstInScope(e.Session, orgs, locs)
+	if match == nil {
+		if inScope {
+			if rec, ok := e.Entity.Asset.(*oamreg.IPNetRecord); ok {
+				e.Session.Log().Info("not expanding scope from netblock registration: registrant not attributed to the target",
+					"cidr", rec.CIDR.String(), "registrant", rec.Name,
+					slog.Group("plugin", "name", h.plugin.name, "handler", h.name))
 			}
 		}
+		return
+	}
+	// a block registered to another organization is not admitted because an
+	// address or organization in its record matched (a shared office, a
+	// parent company's address)
+	if h.declineForeign(e) {
+		return
 	}
 
-	if found {
-		// get the registered CIDR Netblock entity
-		if nb, err := h.plugin.getRegisteredNetblockEntity(e.Session, e.Entity); err == nil && nb != nil {
-			// the netblock should be added to the scope
-			h.plugin.enqueueIfOutOfScope(e.Session, nb)
-		}
-		for _, o := range orgs {
-			h.plugin.enqueueIfOutOfScope(e.Session, o)
-		}
-		for _, loc := range locs {
-			h.plugin.enqueueIfOutOfScope(e.Session, loc)
-		}
-	} else if inScope {
-		if rec, ok := e.Entity.Asset.(*oamreg.IPNetRecord); ok {
-			e.Session.Log().Info("not expanding scope from netblock registration: registrant not attributed to the target",
-				"cidr", rec.CIDR.String(), "registrant", rec.Name,
-				slog.Group("plugin", "name", h.plugin.name, "handler", h.name))
-		}
+	// get the registered CIDR Netblock entity
+	if nb, err := h.plugin.getRegisteredNetblockEntity(e.Session, e.Entity); err == nil && nb != nil {
+		// the netblock should be added to the scope
+		h.plugin.enqueueIfOutOfScope(e.Session, nb, match, "registrant match")
 	}
+	h.expand(e.Session, match, "registrant match", orgs, locs)
 }
 
 // ownedBySeed reports whether the IPNetRecord is attributed to the target
