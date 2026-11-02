@@ -32,7 +32,7 @@ func (nb *netblock) Name() string {
 }
 
 func (nb *netblock) check(e *et.Event) error {
-	n, ok := e.Entity.Asset.(*network.Netblock)
+	_, ok := e.Entity.Asset.(*network.Netblock)
 	if !ok {
 		return errors.New("failed to cast the Netblock asset")
 	}
@@ -46,8 +46,13 @@ func (nb *netblock) check(e *et.Event) error {
 	var asset *dbt.Entity
 	var record *rdap.IPNetwork
 	if support.AssetMonitoredWithinTTL(e.Session, e.Entity, nb.plugin.source, since) {
-		asset = nb.lookup(e, n.CIDR.String(), since)
-	} else {
+		asset = nb.lookup(e, e.Entity, since)
+	}
+	// Queried again when the netblock has no registration record to show
+	// for the lookup it is marked with: the record was never stored, or the
+	// netblock was marked before records were stored under their registered
+	// range.
+	if asset == nil {
 		var completed bool
 		asset, record, completed = nb.query(e, e.Entity)
 		if completed {
@@ -61,27 +66,39 @@ func (nb *netblock) check(e *et.Event) error {
 	return nil
 }
 
-func (nb *netblock) lookup(e *et.Event, cidr string, since time.Time) *dbt.Entity {
+// lookup returns the registration record that the netblock's last RDAP
+// lookup linked to it. The record is found by the netblock's own
+// "registration" edge, not by CIDR: a record is stored under the range it
+// registers, which is often larger than the netblock (a /22 registration for
+// an announced /24) and shared by several netblocks.
+func (nb *netblock) lookup(e *et.Event, asset *dbt.Entity, since time.Time) *dbt.Entity {
 	ctx, cancel := context.WithTimeout(e.Session.Ctx(), 30*time.Second)
 	defer cancel()
 
-	ents, err := e.Session.DB().FindEntitiesByContent(ctx, oam.IPNetRecord, since, 1, dbt.ContentFilters{
-		"cidr": cidr,
-	})
-	if err != nil || len(ents) != 1 {
+	edges, err := e.Session.DB().OutgoingEdges(ctx, asset, since, "registration")
+	if err != nil {
 		return nil
 	}
-	ipnet := ents[0]
-
-	if tags, err := e.Session.DB().FindEntityTags(ctx, ipnet,
-		since, nb.plugin.source.Name); err == nil && len(tags) > 0 {
-		for _, tag := range tags {
-			if tag.Property.PropertyType() == oam.SourceProperty {
-				return ipnet
+	for _, edge := range edges {
+		if edge.ToEntity == nil {
+			continue
+		}
+		ipnet, err := e.Session.DB().FindEntityById(ctx, edge.ToEntity.ID)
+		if err != nil || ipnet == nil {
+			continue
+		}
+		if _, ok := ipnet.Asset.(*oamreg.IPNetRecord); !ok {
+			continue
+		}
+		if tags, err := e.Session.DB().FindEntityTags(ctx, ipnet,
+			since, nb.plugin.source.Name); err == nil && len(tags) > 0 {
+			for _, tag := range tags {
+				if tag.Property.PropertyType() == oam.SourceProperty {
+					return ipnet
+				}
 			}
 		}
 	}
-
 	return nil
 }
 
@@ -115,18 +132,51 @@ func (nb *netblock) query(e *et.Event, asset *dbt.Entity) (*dbt.Entity, *rdap.IP
 	if !ok {
 		return nil, nil, true
 	}
-	return nb.store(e, record, asset), record, true
+	// RDAP answered, but an answer that could not be stored does not count
+	// as a lookup: the netblock is queried again next time
+	rec := nb.store(e, record, asset)
+	return rec, record, rec != nil
 }
 
+// store saves the RDAP answer as an IPNetRecord linked to the netblock by a
+// "registration" edge, and returns the record. The record is stored under
+// the CIDR that the answer registers (registeredPrefix), which the database
+// requires to contain the answer's start and end addresses. A failure is
+// logged and nil returned.
 func (nb *netblock) store(e *et.Event, resp *rdap.IPNetwork, asset *dbt.Entity) *dbt.Entity {
 	n := asset.Asset.(*network.Netblock)
+
+	start, err1 := netip.ParseAddr(resp.StartAddress)
+	end, err2 := netip.ParseAddr(resp.EndAddress)
+	if err1 != nil || err2 != nil {
+		nb.storeFailed(e, n, resp, "the answer has no valid address range")
+		return nil
+	}
+	cidr, start, end, ok := registeredPrefix(n.CIDR, start, end)
+	if !ok {
+		nb.storeFailed(e, n, resp, "the answer's address range does not cover the netblock")
+		return nil
+	}
+	if resp.Handle == "" {
+		nb.storeFailed(e, n, resp, "the answer has no handle")
+		return nil
+	}
+	name := resp.Name
+	if name == "" {
+		name = resp.Handle
+	}
+	ntype := "IPv4"
+	if cidr.Addr().Is6() {
+		ntype = "IPv6"
+	}
+
 	ipnetrec := &oamreg.IPNetRecord{
-		CIDR:         n.CIDR,
+		CIDR:         cidr,
 		Handle:       resp.Handle,
-		StartAddress: netip.MustParseAddr(resp.StartAddress),
-		EndAddress:   netip.MustParseAddr(resp.EndAddress),
-		Type:         n.Type,
-		Name:         resp.Name,
+		StartAddress: start,
+		EndAddress:   end,
+		Type:         ntype,
+		Name:         name,
 		Method:       resp.Type,
 		Country:      resp.Country,
 		ParentHandle: resp.ParentHandle,
@@ -150,6 +200,7 @@ func (nb *netblock) store(e *et.Event, resp *rdap.IPNetwork, asset *dbt.Entity) 
 		}
 	}
 	if !reg || !last {
+		nb.storeFailed(e, n, resp, "the answer lacks a registration or last changed date")
 		return nil
 	}
 
@@ -157,24 +208,71 @@ func (nb *netblock) store(e *et.Event, resp *rdap.IPNetwork, asset *dbt.Entity) 
 	defer cancel()
 
 	record, err := e.Session.DB().CreateAsset(ctx, ipnetrec)
-	if err == nil && record != nil {
-		_, _ = e.Session.DB().CreateEntityProperty(ctx, record, &general.SourceProperty{
+	if err != nil || record == nil {
+		reason := "the database did not return the record"
+		if err != nil {
+			reason = err.Error()
+		}
+		nb.storeFailed(e, n, resp, reason)
+		return nil
+	}
+
+	_, _ = e.Session.DB().CreateEntityProperty(ctx, record, &general.SourceProperty{
+		Source:     nb.plugin.source.Name,
+		Confidence: nb.plugin.source.Confidence,
+	})
+
+	if edge, err := e.Session.DB().CreateEdge(ctx, &dbt.Edge{
+		Relation:   &general.SimpleRelation{Name: "registration"},
+		FromEntity: asset,
+		ToEntity:   record,
+	}); err == nil && edge != nil {
+		_, _ = e.Session.DB().CreateEdgeProperty(ctx, edge, &general.SourceProperty{
 			Source:     nb.plugin.source.Name,
 			Confidence: nb.plugin.source.Confidence,
 		})
-
-		if edge, err := e.Session.DB().CreateEdge(ctx, &dbt.Edge{
-			Relation:   &general.SimpleRelation{Name: "registration"},
-			FromEntity: asset,
-			ToEntity:   record,
-		}); err == nil && edge != nil {
-			_, _ = e.Session.DB().CreateEdgeProperty(ctx, edge, &general.SourceProperty{
-				Source:     nb.plugin.source.Name,
-				Confidence: nb.plugin.source.Confidence,
-			})
-		}
 	}
 	return record
+}
+
+func (nb *netblock) storeFailed(e *et.Event, n *network.Netblock, resp *rdap.IPNetwork, reason string) {
+	e.Session.Log().Info("RDAP registration record not stored", "cidr", n.CIDR.String(),
+		"handle", resp.Handle, "range", resp.StartAddress+" - "+resp.EndAddress, "reason", reason,
+		slog.Group("plugin", "name", nb.plugin.name, "handler", nb.name))
+}
+
+// registeredPrefix returns the CIDR to store the registration of the
+// address range start-end under, which RDAP returned for the netblock
+// block, and the range clamped to that CIDR.
+//
+// RDAP answers a query for a netblock with the most specific registration
+// covering it, which is often larger than the announced prefix: a company's
+// /22 announced as four /24s. The record is stored under the registered
+// range, which the database requires to contain its start and end
+// addresses, so the netblocks it covers share one record. A range that is
+// not a single CIDR block is stored under its block that contains the
+// netblock, with the range clamped to that block. An answer inside the
+// netblock (smaller than the query) is stored under the netblock.
+func registeredPrefix(block netip.Prefix, start, end netip.Addr) (netip.Prefix, netip.Addr, netip.Addr, bool) {
+	block = block.Masked()
+	if !block.IsValid() || !start.IsValid() || !end.IsValid() ||
+		start.Is4() != block.Addr().Is4() || end.Is4() != block.Addr().Is4() {
+		return netip.Prefix{}, start, end, false
+	}
+
+	prefixes := support.RangeToPrefixes(start, end, maxRDAPRangePrefixes)
+	for _, p := range prefixes {
+		if p.Bits() <= block.Bits() && p.Contains(block.Addr()) {
+			if len(prefixes) == 1 {
+				return p, start, end, true
+			}
+			return p, p.Addr(), support.LastAddr(p), true
+		}
+	}
+	if block.Contains(start) && block.Contains(end) {
+		return block, start, end, true
+	}
+	return netip.Prefix{}, start, end, false
 }
 
 func (nb *netblock) process(e *et.Event, record *rdap.IPNetwork, asset *dbt.Entity) {

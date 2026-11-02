@@ -284,6 +284,11 @@ func RangeToPrefixes(start, end netip.Addr, max int) []netip.Prefix {
 	}
 }
 
+// LastAddr returns the last address in the prefix.
+func LastAddr(p netip.Prefix) netip.Addr {
+	return lastAddr(p)
+}
+
 func lastAddr(p netip.Prefix) netip.Addr {
 	a := p.Masked().Addr().AsSlice()
 	bits := p.Bits()

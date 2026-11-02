@@ -15,6 +15,7 @@ import (
 	oam "github.com/owasp-amass/open-asset-model"
 	oamdns "github.com/owasp-amass/open-asset-model/dns"
 	oamnet "github.com/owasp-amass/open-asset-model/network"
+	oamorg "github.com/owasp-amass/open-asset-model/org"
 	oamreg "github.com/owasp-amass/open-asset-model/registration"
 )
 
@@ -66,7 +67,15 @@ var scopeDistances sync.Map
 
 func distanceKey(sess et.Session, a oam.Asset) string {
 	a = canonicalScopeAsset(a)
-	return sess.ID().String() + "|" + string(a.AssetType()) + "|" + strings.ToLower(a.Key())
+	key := a.Key()
+	// scope matches an organization by name, and many Organization entities
+	// carry the same name, so its distance is kept by name too
+	if o, ok := a.(*oamorg.Organization); ok {
+		if key = strings.TrimSpace(o.Name); key == "" {
+			key = strings.TrimSpace(o.LegalName)
+		}
+	}
+	return sess.ID().String() + "|" + string(a.AssetType()) + "|" + strings.ToLower(key)
 }
 
 // canonicalScopeAsset maps a registration record to the asset it registers,
@@ -221,7 +230,7 @@ func ForgetSession(sess et.Session) {
 	}
 	prefix := sess.ID().String() + "|"
 	for _, m := range []*sync.Map{
-		&decisionsLogged, &scopeDistances, &sharedLocationsLogged, &roleOrgsLogged,
+		&decisionsLogged, &scopeDistances, &sharedLocationsLogged, &roleOrgsLogged, &ownedAdmitted,
 	} {
 		m.Range(func(k, _ any) bool {
 			if s, ok := k.(string); ok && strings.HasPrefix(s, prefix) {

@@ -165,10 +165,25 @@ func (h *horRegRec) processIPNetRecord(e *et.Event, orgs []*dbt.Entity, locs []*
 	// attributed to the target: an RDAP contact email on a seed domain.
 	// Otherwise it is handled like an out-of-scope record below, and expands
 	// only when its registrant is already known to be in scope.
+	//
+	// The record is stored under the range it registers, which may be larger
+	// than the netblocks in scope (a /22 registration for an announced /24),
+	// so an owned record also counts as in scope when a netblock linked to
+	// it is.
 	inScope := h.plugin.isEntityInScope(e.Session, e.Entity)
-	if inScope && h.ownedBySeed(e) {
-		h.expand(e.Session, e.Entity, "registration record", orgs, locs)
-		return
+	if h.ownedBySeed(e) {
+		if !inScope {
+			for _, nb := range h.plugin.getRegisteredNetblockEntities(e.Session, e.Entity) {
+				if h.plugin.isEntityInScope(e.Session, nb) {
+					inScope = true
+					break
+				}
+			}
+		}
+		if inScope {
+			h.expand(e.Session, e.Entity, "registration record", orgs, locs)
+			return
+		}
 	}
 
 	match := h.firstInScope(e.Session, orgs, locs)
@@ -189,9 +204,8 @@ func (h *horRegRec) processIPNetRecord(e *et.Event, orgs []*dbt.Entity, locs []*
 		return
 	}
 
-	// get the registered CIDR Netblock entity
-	if nb, err := h.plugin.getRegisteredNetblockEntity(e.Session, e.Entity); err == nil && nb != nil {
-		// the netblock should be added to the scope
+	// the netblocks the record registers should be added to the scope
+	for _, nb := range h.plugin.getRegisteredNetblockEntities(e.Session, e.Entity) {
 		h.plugin.enqueueIfOutOfScope(e.Session, nb, match, "registrant match")
 	}
 	h.expand(e.Session, match, "registrant match", orgs, locs)

@@ -612,14 +612,23 @@ func (h *horizPlugin) expandFromContactRecord(sess et.Session, cr, from *dbt.Ent
 				h.enqueueIfOutOfScope(sess, fqdn, from, via)
 			}
 		case *oamreg.IPNetRecord:
-			nb, err := h.getRegisteredNetblockEntity(sess, rec)
-			if err != nil || nb == nil || h.isEntityInScope(sess, nb) {
+			var nbs []*dbt.Entity
+			var seed bool
+			for _, nb := range h.getRegisteredNetblockEntities(sess, rec) {
+				if h.isEntityInScope(sess, nb) {
+					continue
+				}
+				if support.IsSeedAsset(sess, nb.Asset) {
+					seed = true
+				}
+				nbs = append(nbs, nb)
+			}
+			if len(nbs) == 0 || (!seed && support.DeclineForeignRegistration(sess, rec, h.name)) {
 				continue
 			}
-			if !support.IsSeedAsset(sess, nb.Asset) && support.DeclineForeignRegistration(sess, rec, h.name) {
-				continue
+			for _, nb := range nbs {
+				h.enqueueIfOutOfScope(sess, nb, from, via)
 			}
-			h.enqueueIfOutOfScope(sess, nb, from, via)
 		case *oamcert.TLSCertificate:
 			if !support.DeclineMergedCertificate(sess, rec, h.name) {
 				h.enqueueCertificateDomain(sess, rec, from, via)
@@ -674,20 +683,59 @@ func (h *horizPlugin) getRegisteredDomainEntity(sess et.Session, record *dbt.Ent
 	return nil, fmt.Errorf("failed to obtain the registered domain name FQDN for: %s", dr.Domain)
 }
 
-func (h *horizPlugin) getRegisteredNetblockEntity(sess et.Session, record *dbt.Entity) (*dbt.Entity, error) {
+// maxRegisteredNetblocks bounds how many netblocks linked to one
+// registration record are considered. A record is stored under the range it
+// registers and linked from each netblock it covers; a provider's large
+// registration can be linked from many.
+const maxRegisteredNetblocks = 64
+
+// getRegisteredNetblockEntities returns the netblocks the IPNetRecord
+// registers: those linked to it by a "registration" edge (the netblocks
+// RDAP was queried for, which may be smaller than the registered range),
+// and the netblock with the record's own CIDR when one is stored.
+func (h *horizPlugin) getRegisteredNetblockEntities(sess et.Session, record *dbt.Entity) []*dbt.Entity {
 	iprec, valid := record.Asset.(*oamreg.IPNetRecord)
 	if !valid {
-		return nil, errors.New("failed to cast the IPNetRecord")
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(sess.Ctx(), 30*time.Second)
 	defer cancel()
 
-	if ents, err := sess.DB().FindEntitiesByContent(ctx, oam.Netblock, time.Time{}, 1, dbt.ContentFilters{
-		"cidr": iprec.CIDR.String(),
-	}); err == nil && len(ents) == 1 {
-		return ents[0], nil
+	var results []*dbt.Entity
+	seen := make(map[string]struct{})
+	add := func(ent *dbt.Entity) {
+		if ent == nil {
+			return
+		}
+		if _, ok := ent.Asset.(*oamnet.Netblock); !ok {
+			return
+		}
+		if _, dup := seen[ent.ID]; !dup {
+			seen[ent.ID] = struct{}{}
+			results = append(results, ent)
+		}
 	}
 
-	return nil, fmt.Errorf("failed to obtain the registered CIDR Netblock for: %s", iprec.CIDR.String())
+	if edges, err := sess.DB().IncomingEdges(ctx, record, time.Time{}, "registration"); err == nil {
+		for _, edge := range edges {
+			if len(results) >= maxRegisteredNetblocks {
+				break
+			}
+			if edge.FromEntity == nil {
+				continue
+			}
+			if ent, err := sess.DB().FindEntityById(ctx, edge.FromEntity.ID); err == nil {
+				add(ent)
+			}
+		}
+	}
+	if len(results) < maxRegisteredNetblocks {
+		if ents, err := sess.DB().FindEntitiesByContent(ctx, oam.Netblock, time.Time{}, 1, dbt.ContentFilters{
+			"cidr": iprec.CIDR.String(),
+		}); err == nil && len(ents) == 1 {
+			add(ents[0])
+		}
+	}
+	return results
 }

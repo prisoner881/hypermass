@@ -191,13 +191,28 @@ func (r *ipnet) store(e *et.Event, resp *rdap.IPNetwork, entity *dbt.Entity, m *
 	r.admitParentNetblock(e, entity)
 }
 
+// maxAdmittedNetblocks bounds how many netblocks linked to one owned
+// registration record are admitted when the record is stored.
+const maxAdmittedNetblocks = 256
+
+// admitParentNetblock admits the netblocks linked to the registration
+// record when the record's contacts attribute it to a seed. The record is
+// checked once, before its netblocks: a provider's registration, shared by
+// many netblocks, is never walked netblock by netblock.
 func (r *ipnet) admitParentNetblock(e *et.Event, ipnet *dbt.Entity) {
 	ctx, cancel := context.WithTimeout(e.Session.Ctx(), 15*time.Second)
 	defer cancel()
 
+	if owned, _ := support.IPNetRecordOwnedBySeed(ctx, e.Session, ipnet); !owned {
+		return
+	}
+
 	edges, err := e.Session.DB().IncomingEdges(ctx, ipnet, time.Time{}, "registration")
 	if err != nil {
 		return
+	}
+	if len(edges) > maxAdmittedNetblocks {
+		edges = edges[:maxAdmittedNetblocks]
 	}
 	for _, edge := range edges {
 		if edge.FromEntity == nil {
