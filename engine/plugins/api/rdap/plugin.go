@@ -160,9 +160,11 @@ func (rd *rdapPlugin) Start(r et.Registry) error {
 		plugin: rd,
 	}
 	if err := r.RegisterHandler(&et.Handler{
-		Plugin:       rd,
-		Name:         rd.ipaddr.name,
-		Position:     41,
+		Plugin: rd,
+		Name:   rd.ipaddr.name,
+		// after IP-Netblock (4), which fills in the address's BGP prefix;
+		// positions must be unique per event type among exclusive handlers
+		Position:     5,
 		Exclusive:    true,
 		MaxInstances: support.MinHandlerInstances,
 		Transforms:   []string{string(oam.IPNetRecord)},
