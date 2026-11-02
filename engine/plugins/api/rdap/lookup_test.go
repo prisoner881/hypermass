@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openrdap/rdap"
 	"github.com/openrdap/rdap/bootstrap"
 	"github.com/owasp-amass/amass/v5/config"
@@ -112,9 +113,12 @@ func (f *fakeRegistry) RoundTrip(req *http.Request) (*http.Response, error) {
 
 type rdapTestSession struct {
 	et.Session
+	id  uuid.UUID
 	db  repository.Repository
 	cfg *config.Config
 }
+
+func (s *rdapTestSession) ID() uuid.UUID { return s.id }
 
 func (s *rdapTestSession) Ctx() context.Context      { return context.Background() }
 func (s *rdapTestSession) Log() *slog.Logger         { return discardLog() }
@@ -157,7 +161,7 @@ func newRDAPTest(t *testing.T, reg *fakeRegistry, asset oam.Asset) (*rdapPlugin,
 	p.netblock = &netblock{name: p.name + "-Netblock-Handler", plugin: p}
 	p.autsys = &autsys{name: p.name + "-Autsys-Handler", plugin: p}
 
-	return p, &et.Event{Entity: ent, Session: &rdapTestSession{db: db, cfg: cfg}, Dispatcher: nopDispatcher{}}
+	return p, &et.Event{Entity: ent, Session: &rdapTestSession{id: uuid.New(), db: db, cfg: cfg}, Dispatcher: nopDispatcher{}}
 }
 
 func marked(e *et.Event, src *et.Source) bool {

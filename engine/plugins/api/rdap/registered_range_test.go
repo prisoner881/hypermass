@@ -36,6 +36,10 @@ func TestRegisteredPrefix(t *testing.T) {
 		// a range that is not one CIDR block: its block containing the netblock
 		{"198.51.104.0/24", "198.51.96.0", "198.51.105.255", "198.51.104.0/23", "198.51.104.0", "198.51.105.255"},
 		{"198.51.97.0/24", "198.51.96.0", "198.51.105.255", "198.51.96.0/21", "198.51.96.0", "198.51.103.255"},
+		// a range that splits into many CIDR blocks (AT&T's 99.10.64.0 -
+		// 99.75.191.255 for the announced 99.32.0.0/12)
+		{"99.32.0.0/12", "99.10.64.0", "99.75.191.255", "99.32.0.0/11", "99.32.0.0", "99.63.255.255"},
+		{"99.10.64.0/18", "99.10.64.0", "99.75.191.255", "99.10.64.0/18", "99.10.64.0", "99.10.127.255"},
 		// an answer inside the netblock is stored under the netblock
 		{"10.0.0.0/16", "10.0.5.0", "10.0.5.255", "10.0.0.0/16", "10.0.5.0", "10.0.5.255"},
 		// an answer that does not cover the netblock
@@ -244,5 +248,55 @@ func TestAdmitParentNetblocksOfOwnedRecord(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A /22 registration announced as /24s is processed, with its contacts,
+// when the first /24 is linked to it. A /24 linked later, after its own
+// addresses were checked, is attributed when the RDAP handler links it.
+func TestNetblockLinkedToOwnedRecordLaterIsAdmitted(t *testing.T) {
+	reg := &fakeRegistry{rdap: reply{200, wideNetworkBody}}
+	p, e := newRDAPTest(t, reg, &network.Netblock{CIDR: netip.MustParsePrefix("192.0.2.0/24"), Type: "IPv4"})
+	base := e.Session.(*rdapTestSession)
+	base.cfg.AddDomains("target.com")
+	sess := &admitTestSession{rdapTestSession: base, id: uuid.New(), scope: &scopeSet{added: map[string]bool{}}}
+	defer support.ForgetSession(sess)
+	e.Session = sess
+
+	// the first /24 stores the record, whose contacts are then stored
+	if err := p.netblock.check(e); err != nil {
+		t.Fatal(err)
+	}
+	rec := registrationOf(t, e)
+	ctx := context.Background()
+	cr, err := base.db.CreateAsset(ctx, &contact.ContactRecord{DiscoveredAt: "https://rdap.test/entity/WIDE"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := base.db.CreateAsset(ctx, &general.Identifier{UniqueID: "email:noc@target.com", ID: "noc@target.com", Type: general.EmailAddress})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range []struct {
+		label    string
+		from, to *dbt.Entity
+	}{{"technical_contact", rec, cr}, {"id", cr, id}} {
+		if _, err := base.db.CreateEdge(ctx, &dbt.Edge{
+			Relation: &general.SimpleRelation{Name: l.label}, FromEntity: l.from, ToEntity: l.to,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// a sibling /24 linked to the record later
+	sib, err := base.db.CreateAsset(ctx, &network.Netblock{CIDR: netip.MustParsePrefix("192.0.3.0/24"), Type: "IPv4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.netblock.check(&et.Event{Entity: sib, Session: sess, Dispatcher: e.Dispatcher}); err != nil {
+		t.Fatal(err)
+	}
+	if !sess.scope.added["192.0.3.0/24"] {
+		t.Error("the /24 linked to the owned record later was not attributed")
 	}
 }

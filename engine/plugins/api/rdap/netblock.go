@@ -61,6 +61,12 @@ func (nb *netblock) check(e *et.Event) error {
 	}
 
 	if asset != nil {
+		// The record may already have been processed, with its contacts,
+		// for another netblock it covers: the record of a /22 announced as
+		// four /24s is processed once per session, when the first /24 is
+		// linked to it. Check this netblock's ownership now that it is
+		// linked, since its addresses may all have been checked before.
+		support.AdmitOwnedNetblock(e, e.Entity)
 		nb.process(e, record, asset)
 	}
 	return nil
@@ -250,9 +256,11 @@ func (nb *netblock) storeFailed(e *et.Event, n *network.Netblock, resp *rdap.IPN
 // /22 announced as four /24s. The record is stored under the registered
 // range, which the database requires to contain its start and end
 // addresses, so the netblocks it covers share one record. A range that is
-// not a single CIDR block is stored under its block that contains the
-// netblock, with the range clamped to that block. An answer inside the
-// netblock (smaller than the query) is stored under the netblock.
+// not a single CIDR block (99.10.64.0 - 99.75.191.255) is stored under the
+// largest CIDR block inside it that contains the netblock, with the range
+// clamped to that block, however many blocks the range would split into. An
+// answer inside the netblock (smaller than the query) is stored under the
+// netblock.
 func registeredPrefix(block netip.Prefix, start, end netip.Addr) (netip.Prefix, netip.Addr, netip.Addr, bool) {
 	block = block.Masked()
 	if !block.IsValid() || !start.IsValid() || !end.IsValid() ||
@@ -260,14 +268,20 @@ func registeredPrefix(block netip.Prefix, start, end netip.Addr) (netip.Prefix, 
 		return netip.Prefix{}, start, end, false
 	}
 
-	prefixes := support.RangeToPrefixes(start, end, maxRDAPRangePrefixes)
-	for _, p := range prefixes {
-		if p.Bits() <= block.Bits() && p.Contains(block.Addr()) {
-			if len(prefixes) == 1 {
-				return p, start, end, true
-			}
-			return p, p.Addr(), support.LastAddr(p), true
+	// the largest CIDR block inside the range that contains the netblock
+	for bits := 0; bits <= block.Bits(); bits++ {
+		p, err := block.Addr().Prefix(bits)
+		if err != nil {
+			continue
 		}
+		first, last := p.Addr(), support.LastAddr(p)
+		if first.Less(start) || end.Less(last) {
+			continue
+		}
+		if first == start && last == end {
+			return p, start, end, true
+		}
+		return p, first, last, true
 	}
 	if block.Contains(start) && block.Contains(end) {
 		return block, start, end, true
