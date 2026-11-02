@@ -181,7 +181,9 @@ func (t *ipTHC) queryFQDN(e *et.Event, apex string) ([]*dbt.Entity, bool) {
 		t.log.Info("dropped out-of-scope names",
 			"apex", apex, "kept", len(inScope), "dropped", dropped)
 	}
-	return t.store(e, inScope), subRetry || cnRetry
+	// a lookup whose names were not all stored is retried, not marked
+	assets, failed := t.store(e, inScope)
+	return assets, subRetry || cnRetry || failed > 0
 }
 
 func (t *ipTHC) checkIP(e *et.Event) error {
@@ -230,11 +232,6 @@ func (t *ipTHC) checkIP(e *et.Event) error {
 		"limit":      {fmt.Sprintf("%d", thcCSVLimit)},
 	}.Encode()
 	raw, retry := t.fetchCSV(e, q, "rdns", cidr)
-	if !retry {
-		support.MarkAssetMonitored(e.Session, e.Entity, t.source)
-	} else {
-		t.rdnsDone.Delete(cidr)
-	}
 
 	seen := make(map[string]struct{}, len(raw))
 	var inScope []string
@@ -253,8 +250,17 @@ func (t *ipTHC) checkIP(e *et.Event) error {
 	}
 	t.log.Info("owned-block rDNS",
 		"cidr", cidr, "returned", len(raw), "in_scope", len(inScope))
+	var failed int
 	if len(inScope) > 0 {
-		t.process(e, t.store(e, inScope))
+		var assets []*dbt.Entity
+		assets, failed = t.store(e, inScope)
+		t.process(e, assets)
+	}
+	// a lookup whose names were not all stored is retried, not marked
+	if !retry && failed == 0 {
+		support.MarkAssetMonitored(e.Session, e.Entity, t.source)
+	} else {
+		t.rdnsDone.Delete(cidr)
 	}
 	return nil
 }
@@ -332,8 +338,9 @@ func (t *ipTHC) fetchCSV(e *et.Event, rawURL, kind, key string) ([]string, bool)
 	return names, false
 }
 
-func (t *ipTHC) store(e *et.Event, names []string) []*dbt.Entity {
-	return support.StoreFQDNsWithSource(e.Session, names, t.source, t.name, t.name+"-Handler")
+// store stores the names and reports how many could not be stored.
+func (t *ipTHC) store(e *et.Event, names []string) ([]*dbt.Entity, int) {
+	return support.StoreFQDNsWithSourceCount(e.Session, names, t.source, t.name, t.name+"-Handler")
 }
 
 func (t *ipTHC) process(e *et.Event, assets []*dbt.Entity) {
