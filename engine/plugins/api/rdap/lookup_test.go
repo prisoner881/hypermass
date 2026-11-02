@@ -59,7 +59,7 @@ func TestRDAPLookupFailureClassification(t *testing.T) {
 
 const (
 	ipv4Bootstrap = `{"version":"1.0","publication":"2026-01-01T00:00:00Z",
-		"services":[[["192.0.2.0/24"],["https://rdap.test/"]]]}`
+		"services":[[["192.0.0.0/22"],["https://rdap.test/"]]]}`
 	asnBootstrap = `{"version":"1.0","publication":"2026-01-01T00:00:00Z",
 		"services":[[["64496-64511"],["https://rdap.test/"]]]}`
 	ipNetworkBody = `{"objectClassName":"ip network","handle":"NET-192-0-2-0-1",

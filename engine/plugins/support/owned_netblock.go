@@ -14,6 +14,7 @@ import (
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	dbt "github.com/owasp-amass/asset-db/types"
 	oam "github.com/owasp-amass/open-asset-model"
+	oamdns "github.com/owasp-amass/open-asset-model/dns"
 	"github.com/owasp-amass/open-asset-model/general"
 	oamnet "github.com/owasp-amass/open-asset-model/network"
 	oamreg "github.com/owasp-amass/open-asset-model/registration"
@@ -36,6 +37,12 @@ const (
 
 var (
 	ownedFillOnce sync.Map // cidr string -> *sync.Once
+	// session ID + CIDR of each netblock attributed this session. The
+	// attribution is checked for every address in a block, and a block once
+	// attributed stays in scope for the session, so later checks of the same
+	// block return at once instead of walking its registration again and
+	// logging the attribution each time.
+	ownedAdmitted sync.Map
 )
 
 // NetblockOwnedBySeed is true when an RDAP contact email on this
@@ -216,16 +223,26 @@ func AdmitOwnedNetblock(e *et.Event, nbEnt *dbt.Entity) bool {
 		return false
 	}
 
+	key := e.Session.ID().String() + "|" + nb.CIDR.Masked().String()
+	if _, done := ownedAdmitted.Load(key); done {
+		return true
+	}
+
 	ctx, cancel := context.WithTimeout(e.Session.Ctx(), 15*time.Second)
 	owned, email := NetblockOwnedBySeed(ctx, e.Session, nbEnt)
 	cancel()
 	if !owned {
 		return false
 	}
+	if _, done := ownedAdmitted.LoadOrStore(key, struct{}{}); done {
+		return true
+	}
 
 	e.Session.Scope().Add(nb)
+	// one step from the seed domain that the contact email is on
+	distance := RecordScopeAddition(e.Session, nb, &oamdns.FQDN{Name: emailDomain(email)})
 	e.Session.Log().Info("netblock attributed to seed via RDAP contact",
-		"cidr", nb.CIDR.String(), "email", email,
+		"cidr", nb.CIDR.String(), "email", email, "distance", distance,
 		"plugin", OwnedNetblockSource.Name)
 
 	if !e.Session.Config().Active || !PrefixEligibleForFill(nb.CIDR) {
