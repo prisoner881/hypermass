@@ -41,6 +41,10 @@ func (d *dnsCNAME) check(e *et.Event) error {
 	if support.IsReverseDNSName(fqdn.Name) {
 		return nil
 	}
+	// the name's zone has answered no lookups this session
+	if support.ForwardZoneBroken(e.Session, fqdn.Name) {
+		return nil
+	}
 
 	since, err := support.TTLStartTime(e.Session.Config(), "FQDN", "FQDN", d.plugin.name)
 	if err != nil {
@@ -81,7 +85,9 @@ func (d *dnsCNAME) query(e *et.Event, name *dbt.Entity) []*relAlias {
 	var alias []*relAlias
 
 	fqdn := name.Asset.(*oamdns.FQDN)
-	if rr, err := support.PerformQuery(e.Session.Ctx(), fqdn.Name, dns.TypeCNAME); err == nil {
+	rr, err := support.PerformQuery(e.Session.Ctx(), fqdn.Name, dns.TypeCNAME)
+	d.plugin.recordForward(e, d.name, fqdn.Name, err)
+	if err == nil {
 		if records := d.store(e, name, rr); len(records) > 0 {
 			alias = append(alias, records...)
 			support.MarkAssetMonitored(e.Session, name, d.source)

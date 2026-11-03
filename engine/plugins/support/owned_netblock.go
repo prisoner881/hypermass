@@ -33,6 +33,11 @@ const (
 	// admitted to scope on the ambiguous path: /20 = 4,096 addresses.
 	ambientAdmitMinPrefixBits = 20
 	ownedFillBatchLog         = 4096
+	// ownedFillMaxBacklog is how many IPAddress events (queued and in
+	// progress) a fill lets build up before it waits for the pipeline to
+	// work through them, checked every ownedFillCheckEvery addresses.
+	ownedFillMaxBacklog = 2048
+	ownedFillCheckEvery = 64
 )
 
 var (
@@ -315,10 +320,26 @@ func fillOwnedNetblock(s et.Session, d et.Dispatcher, nbEnt *dbt.Entity, nb *oam
 	pfx := nb.CIDR
 	log.Info("starting owned-netblock fill", "cidr", pfx.String())
 
-	var created, dispatched, skipped int
+	var created, dispatched, skipped, paused int
 	eachUsableIPv4(pfx, func(addr netip.Addr) bool {
 		if s.Done() || s.Ctx().Err() != nil {
 			return false
+		}
+		// Pace the fill to the pipeline. A fill creates addresses far faster
+		// than they are worked through, and each one leads to more database
+		// writes downstream, all through asset-db's single writer: a /16
+		// filled at full speed kept writes queued for minutes. Every address
+		// is still filled; only the rate changes.
+		if (created+skipped)%ownedFillCheckEvery == 0 {
+			if waited, ok := waitForFillRoom(s); !ok {
+				return false
+			} else if waited {
+				paused++
+				if paused == 1 {
+					log.Info("owned-netblock fill paused while the IPAddress backlog is full",
+						"cidr", pfx.String(), "max_backlog", ownedFillMaxBacklog)
+				}
+			}
 		}
 		ctx, cancel := context.WithTimeout(s.Ctx(), 10*time.Second)
 		ipEnt, err := s.DB().CreateAsset(ctx, &oamnet.IPAddress{
@@ -369,8 +390,36 @@ func fillOwnedNetblock(s et.Session, d et.Dispatcher, nbEnt *dbt.Entity, nb *oam
 	})
 
 	log.Info("owned-netblock fill finished",
-		"cidr", pfx.String(), "created", created, "dispatched", dispatched, "skipped", skipped)
+		"cidr", pfx.String(), "created", created, "dispatched", dispatched, "skipped", skipped, "paused", paused)
 }
+
+// waitForFillRoom waits while the session's IPAddress backlog (queued and
+// in progress) is at ownedFillMaxBacklog or more. It reports whether it
+// waited, and false for ok when the session ended while waiting.
+func waitForFillRoom(s et.Session) (waited, ok bool) {
+	b := s.Backlog()
+	if b == nil {
+		return false, true
+	}
+	for {
+		if s.Done() || s.Ctx().Err() != nil {
+			return waited, false
+		}
+		q, l, _, err := b.Counts(oam.IPAddress)
+		if err != nil || q+l < ownedFillMaxBacklog {
+			return waited, true
+		}
+		waited = true
+		select {
+		case <-s.Ctx().Done():
+			return waited, false
+		case <-time.After(fillPauseInterval):
+		}
+	}
+}
+
+// fillPauseInterval is how often a paused fill checks the backlog again.
+var fillPauseInterval = 2 * time.Second
 
 func eachUsableIPv4(p netip.Prefix, fn func(netip.Addr) bool) {
 	if !PrefixEligibleForFill(p) {

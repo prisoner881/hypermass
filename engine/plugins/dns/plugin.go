@@ -6,6 +6,7 @@ package dns
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -295,4 +296,16 @@ func (d *dnsPlugin) getApexList() []string {
 		results = append(results, name)
 	}
 	return results
+}
+
+// recordForward records the outcome of a forward lookup of the name for the
+// session's broken-zone tracking (support.RecordForwardLookup), and logs
+// once when the name's zone is found not to answer.
+func (d *dnsPlugin) recordForward(e *et.Event, handler, name string, err error) {
+	failed := errors.Is(err, support.ErrFailedMaxDNSAttempts)
+	if zone, broken := support.RecordForwardLookup(e.Session, name, failed); broken {
+		e.Session.Log().Info("DNS zone is not answering; forward lookups of its other names are skipped",
+			"zone", zone, "names", support.BrokenForwardZoneNames,
+			slog.Group("plugin", "name", d.name, "handler", handler))
+	}
 }
