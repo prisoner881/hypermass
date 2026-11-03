@@ -88,3 +88,94 @@ func ReverseZoneBroken(sess et.Session, addr netip.Addr) bool {
 	defer z.mu.Unlock()
 	return !z.answered && z.failures >= BrokenReverseZoneFailures
 }
+
+// Broken forward zones: DNS zones whose name servers do not answer.
+//
+// A zone such as an Active Directory or wireless sub-zone that is delegated
+// in public DNS but served only internally returns SERVFAIL for every name
+// in it, and each lookup is retried until it fails. Names in such zones keep
+// arriving (owned-block PTR records name hosts in them), and each was looked
+// up four times (A/AAAA, CNAME, TXT, subdomains), six attempts each. Once
+// lookups of BrokenForwardZoneNames distinct names in a zone have failed
+// with none answered, the session stops forward lookups of the zone's other
+// names. A lookup answered with "no such name" or "no record of this type"
+// is an answer, and keeps the zone open.
+//
+// The zone of a name is the name without its first label. A registered
+// domain (buffalo.edu) is never treated as broken, only zones below it
+// (ad.med.buffalo.edu, wireless.buffalo.edu): a run of failures at the top
+// of a target's domain is far more likely a resolver problem than a dead
+// zone, and losing it would lose the enumeration.
+const BrokenForwardZoneNames = 10
+
+type forwardZone struct {
+	mu       sync.Mutex
+	failed   map[string]struct{}
+	answered bool
+}
+
+// session ID + "|" + zone -> *forwardZone
+var forwardZones sync.Map
+
+// ForwardZone returns the zone of the name (the name without its first
+// label), or "" when that zone is a registered domain or above it.
+func ForwardZone(name string) string {
+	n := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	if IsReverseDNSName(n) {
+		return ""
+	}
+	dom := RegisteredDomain(n)
+	if dom == "" {
+		return ""
+	}
+	i := strings.IndexByte(n, '.')
+	if i < 0 {
+		return ""
+	}
+	zone := n[i+1:]
+	if len(zone) <= len(dom) || !strings.HasSuffix(zone, "."+dom) {
+		return ""
+	}
+	return zone
+}
+
+// RecordForwardLookup records the outcome of a forward lookup of the name:
+// failed when it failed every attempt, otherwise answered. It returns the
+// name's zone and whether this failure made the zone count as broken.
+func RecordForwardLookup(sess et.Session, name string, failed bool) (string, bool) {
+	zone := ForwardZone(name)
+	if zone == "" || sess == nil {
+		return zone, false
+	}
+	v, _ := forwardZones.LoadOrStore(sess.ID().String()+"|"+zone, &forwardZone{failed: make(map[string]struct{})})
+	z := v.(*forwardZone)
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	if !failed {
+		z.answered = true
+		return zone, false
+	}
+	if z.answered || len(z.failed) >= BrokenForwardZoneNames {
+		return zone, false
+	}
+	z.failed[strings.ToLower(strings.TrimSuffix(name, "."))] = struct{}{}
+	return zone, len(z.failed) == BrokenForwardZoneNames
+}
+
+// ForwardZoneBroken reports whether lookups of BrokenForwardZoneNames
+// distinct names in the name's zone have failed this session with none
+// answered.
+func ForwardZoneBroken(sess et.Session, name string) bool {
+	zone := ForwardZone(name)
+	if zone == "" || sess == nil {
+		return false
+	}
+	v, found := forwardZones.Load(sess.ID().String() + "|" + zone)
+	if !found {
+		return false
+	}
+	z := v.(*forwardZone)
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return !z.answered && len(z.failed) >= BrokenForwardZoneNames
+}

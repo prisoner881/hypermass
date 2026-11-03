@@ -172,6 +172,11 @@ func EnsureOpenPortsScanned(e *et.Event, ent *dbt.Entity, dial amassnet.DialCont
 	if IsNonRoutableAddress(ip.Address) {
 		return nil
 	}
+	// No BGP route covers the address's network, so no probe can reach it.
+	// It is not marked as scanned: a later session checks the route again.
+	if KnownUnrouted(e.Session, ip.Address) {
+		return nil
+	}
 
 	result, err, _ := scanGroup.Do(ent.ID, func() (interface{}, error) {
 		ctx := e.Session.Ctx()

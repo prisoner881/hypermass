@@ -34,6 +34,10 @@ func (d *dnsTXT) check(e *et.Event) error {
 	if support.IsReverseDNSName(fqdn.Name) {
 		return nil
 	}
+	// the name's zone has answered no lookups this session
+	if support.ForwardZoneBroken(e.Session, fqdn.Name) {
+		return nil
+	}
 
 	if support.HasDNSRecordType(e, int(dns.TypeCNAME)) {
 		return nil
@@ -90,7 +94,9 @@ func (d *dnsTXT) query(e *et.Event, name *dbt.Entity) []dns.RR {
 		return txtRecords
 	}
 
-	if rr, err := support.PerformQuery(e.Session.Ctx(), fqdn.Name, dns.TypeTXT); err == nil {
+	rr, err := support.PerformQuery(e.Session.Ctx(), fqdn.Name, dns.TypeTXT)
+	d.plugin.recordForward(e, d.name, fqdn.Name, err)
+	if err == nil {
 		txtRecords = append(txtRecords, rr...)
 		support.MarkAssetMonitored(e.Session, name, d.source)
 	} else if err == support.ErrFailedMaxDNSAttempts {

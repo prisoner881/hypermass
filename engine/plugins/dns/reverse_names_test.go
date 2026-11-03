@@ -6,6 +6,7 @@ package dns
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
@@ -77,5 +78,33 @@ func TestReverseSkipsBrokenZone(t *testing.T) {
 		dbt.ContentFilters{"name": "77.153.123.74.in-addr.arpa"})
 	if err == nil && len(ents) > 0 {
 		t.Error("the reverse name was created for an address in a broken zone")
+	}
+}
+
+// The forward DNS handlers skip names in a zone that has answered no
+// lookups this session.
+func TestForwardHandlersSkipBrokenZone(t *testing.T) {
+	rt := newReverseTest(t)
+	defer support.ForgetSession(rt.sess)
+	for i := 0; i < support.BrokenForwardZoneNames; i++ {
+		support.RecordForwardLookup(rt.sess, fmt.Sprintf("host%d.ad.med.example.com", i), true)
+	}
+	p := NewDNS().(*dnsPlugin)
+	ent := rt.asset(&oamdns.FQDN{Name: "pc42.ad.med.example.com"})
+	e := &et.Event{Name: "pc42.ad.med.example.com", Entity: ent, Session: rt.sess}
+
+	for name, check := range map[string]func(*et.Event) error{
+		"DNS-IP":         (&dnsIP{name: "DNS-IP", plugin: p, source: p.source}).check,
+		"DNS-CNAME":      (&dnsCNAME{name: "DNS-CNAME", plugin: p, source: p.source}).check,
+		"DNS-TXT":        (&dnsTXT{name: "DNS-TXT", plugin: p, source: p.source}).check,
+		"DNS-Subdomains": (&dnsSubs{name: "DNS-Subdomains", plugin: p}).check,
+	} {
+		start := time.Now()
+		if err := check(e); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if took := time.Since(start); took > time.Second {
+			t.Errorf("%s took %v on a name in a broken zone, want an immediate return", name, took)
+		}
 	}
 }
