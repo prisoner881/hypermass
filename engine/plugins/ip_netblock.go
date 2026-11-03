@@ -91,10 +91,13 @@ func (d *ipNetblock) lookup(e *et.Event) error {
 		return nil
 	}
 
+	// Wait for the address's BGP prefix, unless BGP.Tools found that no
+	// route covers its network: no prefix will come, and waiting held this
+	// handler for 30 seconds on every such address.
 	var entry *sessions.CIDRangerEntry
 	for range 120 {
 		entry = support.IPNetblock(e.Session, ip.Address.String())
-		if entry != nil {
+		if entry != nil || support.KnownUnrouted(e.Session, ip.Address) {
 			break
 		}
 		time.Sleep(250 * time.Millisecond)

@@ -117,11 +117,21 @@ func (r *autsys) query(e *et.Event, nb *dbt.Entity) *dbt.Entity {
 	var asn int
 	arg := nb.Asset.Key()
 
-	if record, err := r.plugin.whois(e.Session.Ctx(), arg); err == nil {
+	record, err := r.plugin.whois(e.Session.Ctx(), arg)
+	switch {
+	case err == nil && record != nil:
 		asn = record.ASN
-	} else {
+	case errors.Is(err, errNoRoute):
+		// an answer, not a failure: the netblock is not announced
+		e.Session.Log().Info("no BGP route covers the netblock", "argument", arg,
+			slog.Group("plugin", "name", r.plugin.name, "handler", r.name))
+	default:
+		reason := "no record returned"
+		if err != nil {
+			reason = err.Error()
+		}
 		e.Session.Log().Error("failed to obtain a response from the WHOIS server", "err",
-			err.Error(), "argument", arg, slog.Group("plugin", "name", r.plugin.name, "handler", r.name))
+			reason, "argument", arg, slog.Group("plugin", "name", r.plugin.name, "handler", r.name))
 	}
 
 	if asn == 0 {
