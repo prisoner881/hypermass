@@ -52,6 +52,10 @@ func (d *dnsReverse) check(e *et.Event) error {
 	if reserved, _ := amassnet.IsReservedAddress(addrstr); reserved {
 		return nil
 	}
+	// the network's reverse zone answers no lookups this session
+	if support.ReverseZoneBroken(e.Session, ip.Address) {
+		return nil
+	}
 
 	reverse, err := dns.ReverseAddr(ip.Address.String())
 	if err != nil {
@@ -126,15 +130,27 @@ func (d *dnsReverse) lookup(e *et.Event, fqdn *dbt.Entity, since time.Time) []*r
 func (d *dnsReverse) query(e *et.Event, ipstr string, ptr *dbt.Entity) []*relRev {
 	var rev []*relRev
 
-	if rr, err := support.PerformQuery(e.Session.Ctx(), ipstr, dns.TypePTR); err == nil {
+	addr, _ := netip.ParseAddr(ipstr)
+	rr, err := support.PerformQuery(e.Session.Ctx(), ipstr, dns.TypePTR)
+	switch {
+	case err == nil:
+		support.RecordReverseLookup(e.Session, addr, false)
 		if records := d.store(e, ptr, rr); len(records) > 0 {
 			rev = append(rev, records...)
 		}
-	} else if err == support.ErrFailedMaxDNSAttempts {
+	case errors.Is(err, support.ErrFailedMaxDNSAttempts):
 		if name, derr := dns.ReverseAddr(ipstr); derr == nil {
 			e.Session.Log().Warn(err.Error(), "fqdn", name,
 				slog.Group("plugin", "name", d.plugin.name, "handler", d.name))
 		}
+		if p, broken := support.RecordReverseLookup(e.Session, addr, true); broken {
+			e.Session.Log().Info("reverse DNS zone is not answering; its other addresses are not looked up",
+				"network", p.String(), "failures", support.BrokenReverseZoneFailures,
+				slog.Group("plugin", "name", d.plugin.name, "handler", d.name))
+		}
+	default:
+		// no such name, no PTR record: the zone answered
+		support.RecordReverseLookup(e.Session, addr, false)
 	}
 	return rev
 }
@@ -176,7 +192,7 @@ func (d *dnsReverse) store(e *et.Event, ptr *dbt.Entity, rr []dns.RR) []*relRev 
 					Confidence: d.plugin.source.Confidence,
 				})
 			}
-		} else {
+		} else if err != nil {
 			e.Session.Log().Error(err.Error(), slog.Group("plugin", "name", d.plugin.name, "handler", d.name))
 		}
 	}

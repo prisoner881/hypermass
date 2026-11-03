@@ -230,7 +230,7 @@ func ForgetSession(sess et.Session) {
 	}
 	prefix := sess.ID().String() + "|"
 	for _, m := range []*sync.Map{
-		&decisionsLogged, &scopeDistances, &sharedLocationsLogged, &roleOrgsLogged, &ownedAdmitted, &unroutedNetworks,
+		&decisionsLogged, &scopeDistances, &sharedLocationsLogged, &roleOrgsLogged, &ownedAdmitted, &unroutedNetworks, &reverseZones,
 	} {
 		m.Range(func(k, _ any) bool {
 			if s, ok := k.(string); ok && strings.HasPrefix(s, prefix) {

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/owasp-amass/amass/v5/config"
 	et "github.com/owasp-amass/amass/v5/engine/types"
 	assetdb "github.com/owasp-amass/asset-db"
@@ -62,9 +63,12 @@ func (scopeOf) IsAssetInScope(a oam.Asset, _ int) (oam.Asset, int) {
 
 type reverseTestSession struct {
 	et.Session
+	id  uuid.UUID
 	db  repository.Repository
 	cfg *config.Config
 }
+
+func (s *reverseTestSession) ID() uuid.UUID { return s.id }
 
 func (s *reverseTestSession) Ctx() context.Context { return context.Background() }
 func (s *reverseTestSession) Log() *slog.Logger {
@@ -92,7 +96,7 @@ func newReverseTest(t *testing.T) *reverseTest {
 	cfg := config.NewConfig()
 	cfg.AddDomains("example.com")
 
-	rt := &reverseTest{t: t, sess: &reverseTestSession{db: db, cfg: cfg}}
+	rt := &reverseTest{t: t, sess: &reverseTestSession{id: uuid.New(), db: db, cfg: cfg}}
 	p := NewDNS().(*dnsPlugin)
 	rt.apex = rt.asset(&oamdns.FQDN{Name: "example.com"})
 	p.addApex("example.com", rt.apex)

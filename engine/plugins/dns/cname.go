@@ -33,9 +33,13 @@ type relAlias struct {
 }
 
 func (d *dnsCNAME) check(e *et.Event) error {
-	_, ok := e.Entity.Asset.(*oamdns.FQDN)
+	fqdn, ok := e.Entity.Asset.(*oamdns.FQDN)
 	if !ok {
 		return errors.New("failed to extract the FQDN asset")
+	}
+	// a reverse DNS name carries only PTR records, which DNS-Reverse looks up
+	if support.IsReverseDNSName(fqdn.Name) {
+		return nil
 	}
 
 	since, err := support.TTLStartTime(e.Session.Config(), "FQDN", "FQDN", d.plugin.name)
