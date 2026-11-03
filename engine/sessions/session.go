@@ -311,7 +311,8 @@ func (s *Session) selectDBMS() error {
 	if err != nil {
 		return errors.New("failed to initialize database store: " + err.Error())
 	}
-	s.db = store
+	// writes are guarded against callers' timeouts cancelling them mid-batch
+	s.db = guardWrites(store)
 	return nil
 }
 
