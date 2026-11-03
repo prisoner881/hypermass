@@ -183,8 +183,17 @@ func (bt *bgpTools) whois(ctx context.Context, ipstr string) (*bgpToolsRecord, e
 	if err != nil {
 		return nil, fmt.Errorf("error reading the response from the WHOIS server: %v", err)
 	}
+	return parseBGPToolsRecord(string(data))
+}
 
-	record := strings.Split(string(data), "|")
+// errNoRoute is BGP.Tools' answer that no BGP route covers the address: it
+// returns "<nil>" (or nothing) in the prefix field.
+var errNoRoute = errors.New("no BGP route covers the address")
+
+// parseBGPToolsRecord parses a BGP.Tools WHOIS answer:
+// ASN | IP | BGP prefix | CC | registry | allocated | AS name
+func parseBGPToolsRecord(data string) (*bgpToolsRecord, error) {
+	record := strings.Split(data, "|")
 	// Ensure the record contains the necessary details (AutonomousSystem and Netblock)
 	if len(record) < 7 {
 		return nil, errors.New("received insufficient data from the WHOIS server")
@@ -208,6 +217,9 @@ func (bt *bgpTools) whois(ctx context.Context, ipstr string) (*bgpToolsRecord, e
 			}
 			r.IP = ip
 		case 2:
+			if field == "" || field == "<nil>" {
+				return nil, errNoRoute
+			}
 			prefix, err := netip.ParsePrefix(field)
 			if err != nil {
 				return nil, err

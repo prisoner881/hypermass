@@ -43,6 +43,10 @@ func (r *netblock) check(e *et.Event) error {
 	if reserved, _ := amassnet.IsReservedAddress(ipstr); reserved {
 		return nil
 	}
+	// no route covers the address's network: BGP.Tools has no prefix to give
+	if support.KnownUnrouted(e.Session, ip.Address) {
+		return nil
+	}
 	// check if there's a netblock associated with this IP address
 	if found, err := e.Session.CIDRanger().Contains(net.ParseIP(ipstr)); err == nil && found {
 		// the rest of the work will be done further down the pipeline
@@ -191,9 +195,22 @@ func (r *netblock) query(e *et.Event, ent *dbt.Entity) (*dbt.Entity, *dbt.Entity
 	addrstr := ip.Address.String()
 
 	record, err := r.plugin.whois(e.Session.Ctx(), addrstr)
+	if errors.Is(err, errNoRoute) {
+		// an answer, not a failure: logged once for the address's network,
+		// whose other addresses are then skipped
+		if p, first := support.RecordUnrouted(e.Session, ip.Address); first {
+			e.Session.Log().Info("no BGP route covers the network; its addresses are not looked up",
+				"network", p.String(), "argument", addrstr, slog.Group("plugin", "name", r.plugin.name, "handler", r.name))
+		}
+		return nil, nil
+	}
 	if err != nil || record == nil {
+		reason := "no record returned"
+		if err != nil {
+			reason = err.Error()
+		}
 		e.Session.Log().Error("failed to obtain a response from the WHOIS server", "err",
-			err.Error(), "argument", addrstr, slog.Group("plugin", "name", r.plugin.name, "handler", r.name))
+			reason, "argument", addrstr, slog.Group("plugin", "name", r.plugin.name, "handler", r.name))
 		return nil, nil
 	}
 
