@@ -1,14 +1,24 @@
-# Maintainer's Guide — Hypermass (`prisoner881/hypermass`), `service-detection` branch
+# Maintainer's Guide — Hypermass (`prisoner881/hypermass`)
 
 **Audience.** A developer who has never seen the Amass codebase or this
 fork, and who needs to maintain, extend, or debug it.
 
 **How to read this.** Part 1 is background on stock Amass — skip it if
-you already know the engine. Parts 2–8 document what this fork changes
-and why. Part 9 is operational knowledge that isn't in any code comment.
-Part 10 is the list of known problems, and Part 11 is the debugging
-methodology that actually works on this system. The appendices are
+you already know the engine. Parts 2–8 document what the fork changed up
+to release 1.0 and why. Part 9 is operational knowledge that isn't in any
+code comment. Part 10 is the list of known problems, and Part 11 is the
+debugging methodology that actually works on this system. Part 12 covers
+releases and naming. **Part 13 covers everything merged on `hypermass-1.1`
+since release 1.0**: active-egress proxying, the engine API, the scope
+overhaul (vetoes, registration-based ownership), and the database and DNS
+fixes found on large runs. Where Part 13 changes something an earlier part
+describes, the earlier part says so and points to it. The appendices are
 reference tables you'll want open while working.
+
+**Companion document.** `docs/HYPERMASS_BRIEFING.md` is a hand-off brief
+for whoever picks up development next: working conventions, the
+environment, open work, and the agreed plan for the remaining scope
+phases. Read it before changing anything.
 
 Everything here was verified against the code at the time of writing.
 Where a claim comes from a production measurement rather than the source,
@@ -21,8 +31,33 @@ rebranded: the banner, `-version` and the visualisation titles still say
 "OWASP Amass v5.1.1", the binaries keep their names, and the Go module
 path is still `github.com/owasp-amass/amass/v5`.
 
-**This revision** covers everything merged up to `hypermass-v1.0.0`
-(`5041be70`, PR #10). New since the previous revision:
+**Branches.**
+
+| Branch | State |
+|---|---|
+| `hypermass-1.1` | **Active development.** Everything since 1.0 (PRs #11–#29). Part 13. |
+| `service-detection` | **Frozen** at `176be5e5` (release 1.0, `hypermass-v1.0.0` = `5041be70`, plus the upload of this guide). Never commit to it. |
+
+**This revision** covers everything merged to `hypermass-1.1` up to
+`e521102b` (PR #29). New since the previous revision (the 1.0 one):
+
+- **Active egress** (13.1): every `-active` connection goes through an
+  operator proxy, or nowhere; DNS and passive sources never do.
+- **Engine API** (13.2): `docs/engine_api.md`, four API bug fixes, and
+  `enum -scope-json`.
+- **DNS resolver override** (13.3): `AMASS_ENGINE_RESOLVERS`,
+  `AMASS_ENGINE_RESOLVER_QPS`, `AMASS_ENGINE_WILDCARD_RESOLVER`.
+- **Scope overhaul** (13.4): shared-provider ASNs, privacy proxies and
+  shared addresses, role and placeholder names, hosting is not ownership,
+  and the `scope_vetoes` framework: resolution alone no longer admits a
+  netblock; registration decides ownership.
+- **RDAP registrations** (13.5) stored under the range they register.
+- **Database writes** (13.6): per-name deadlines and the write guard
+  around asset-db's single writer.
+- **Unrouted space and dead DNS zones** (13.7, 13.8), and **owned-fill
+  pacing** (13.9).
+
+Release-1.0 changes, from the previous revision:
 
 - **Scope:** the netblock admission gate now requires both a small block
   *and* an in-scope name (6, 6.2), after the size-only gate let
@@ -47,8 +82,9 @@ path is still `github.com/owasp-amass/amass/v5`.
 - **Operations:** where each kind of log line goes (9.1), `datasources.yaml`
   traps (9.6), `enum -silent` hiding errors (9.7).
 
-None of this has been ported to `merge/active-proxy-egress`, last updated
-2026-09-21. See the merge notes in Part 6.
+The active-proxy work was ported onto 1.0 as `hypermass-1.1` (13.1); the
+old `merge/active-proxy-egress` and `feature/active-proxy-egress` branches
+and their merge notes in Part 6 are historical.
 
 ---
 
@@ -242,6 +278,13 @@ Count files when you need a number; the table below is the map.
 | Product identity | `support/product.go` (`ProductID`, `ProductReleaseName`) | 4.3 |
 | Dashboard API | `api/server/v1/handlers.go`, `api/server/server.go` | 8 |
 | Support helpers | `support/database.go`, `internal/net/network.go` | 3 |
+| Active egress (1.1) | `internal/net/active_egress.go`, `support/active.go`, `config/active_proxy.go`, the active plugins | 13.1 |
+| Engine API (1.1) | `api/server/v1/`, `pubsub/logger.go`, `internal/enum/scope_json.go`, `docs/engine_api.md` | 13.2 |
+| Resolver override (1.1) | `support/resolvers.go`, `internal/amass_engine/cli.go` | 13.3 |
+| Scope vetoes and ownership (1.1) | `support/scope_decision.go`, `support/registration_verdict.go`, `support/care_of.go`, `support/merged_cert.go`, `support/shared_location.go`, `support/role_names.go`, `whois/privacy_detect.go`, `horizontals/`, `api/rdap/ipaddr.go`, `config/scope_vetoes.go` | 13.4 |
+| RDAP registration storage (1.1) | `api/rdap/netblock.go`, `api/rdap/ipnet.go` | 13.5 |
+| Database write path (1.1) | `support/database.go` (`storeEach`), `sessions/write_guard.go` | 13.6 |
+| Unrouted networks, DNS caps, fill pacing (1.1) | `support/unrouted.go`, `support/reverse_dns.go`, `whois/bgptools/`, `dns/`, `support/owned_netblock.go`, `support/portscan.go` | 13.7–13.9 |
 
 New dependencies: `projectdiscovery/wappalyzergo` **v0.3.2** (web tech
 fingerprints; bumped from v0.2.94 — see 4.3), `runZeroInc/recog-go` (service banner fingerprints,
@@ -865,6 +908,13 @@ cloud range admitted the *entire* range — confirmed on real data as the
 mechanism behind whole AWS/Azure/Google/Cloudflare `/10`–`/12`s being
 scanned.
 
+> **Superseded in 1.1 (13.4.6).** Resolution alone no longer admits a
+> netblock of any size: the two-condition gate below is now logged as a
+> `scope decision` and declined (`scope_vetoes: enforce`). Ownership is
+> decided by the block's registration. The history below explains why the
+> gate existed; keep it in mind if you ever set `scope_vetoes: observe`,
+> which restores it.
+
 **The gate now requires both conditions** (6.2): the block is IPv4 with
 mask `/20` or longer (`support.PrefixEligibleForAmbientAdmit`) **and** an
 in-scope FQDN resolves to the IP (`support.HasInScopeFQDN`). Genuinely
@@ -937,12 +987,22 @@ answers "is this IP in a seed-owned block" from the IP's `contains`
 edges; THC (4.6) and PTR attribution (6.4) use it.
 
 Prefix floor `ownedMinPrefixBits = 16` — a `/15` or larger is not
-filled. Fill is session-end (`FinishOwnedNetblockFills`) so it does not
-race Position 41 the way the reverted in-pipeline version did.
+filled. **When the fill runs:** with `-active`, `AdmitOwnedNetblock` starts
+a fill (in a goroutine, once per CIDR per engine process) as soon as a
+block is attributed mid-run, and `FinishOwnedNetblockFills` at session end
+attributes and fills any scoped block whose contacts only matched later.
+The fill dispatches each synthesised IP as a new event, so the IPs pass
+Position 41 themselves; the race that sank the reverted version (deciding
+ownership after the IP had already passed its consumers) does not arise.
+
+Since 1.1 the fill is **paced** to the pipeline (13.9) and addresses in
+unrouted /24s are filled but not port-scanned (13.7).
 
 Cost on a large public university: a `/16` is ~65k PTR + 65k×100 SYNs.
 Closed ports fail fast; wall clock is hours, not minutes. That is
-accepted when the block is ironclad-attributed.
+accepted when the block is ironclad-attributed. **Full fills are a
+deliberate policy:** the operator wants thorough enumerations, so there is
+no size cap below `/16`. Do not add one without asking.
 
 IPs already in the backlog are not duplicated (schema + TTL). Fill does
 not undo work already done on those addresses.
@@ -967,6 +1027,18 @@ Three admission paths now coexist, by strength of signal:
 | RDAP contact ∈ seed (strong positive) | `AdmitOwnedNetblock` / session-end fill (6.1) | none |
 | in-scope name resolves to the IP, no ownership signal | `PrefixEligibleForAmbientAdmit` **and** `HasInScopeFQDN` | ≤ /20 |
 | individual IP resolved from in-scope FQDN | provenance authorization (6.3) | per-IP |
+
+> **Superseded in 1.1 (13.4.6).** The table above describes 1.0. In 1.1
+> the middle row (resolution + size) is declined, and a negative signal
+> *was* shipped, on a different basis than the one below: the
+> registration verdict calls a record **foreign** when it names a real,
+> non-placeholder organization that is not in scope **and** has a contact
+> email on a non-freemail domain that is not in scope. Redaction does not
+> need detecting for that rule, because a redacted record carries no real
+> organization and no usable email, so it comes out "no information", not
+> foreign. The per-IP RDAP lookup (13.4.7) fetches the record early enough
+> for the decision. The analysis below is still why a *redaction-based*
+> negative was dropped.
 
 A strong *negative* signal was **designed in detail and then dropped as
 unbuildable** — recorded here so it is not re-proposed. The intended
@@ -1331,6 +1403,13 @@ database.
 | `logs/amass/engine/<date>-amass-engine.log` | Everything a plugin logs through `r.Log()` (its registry logger): `Plugin started`, `lookup failed; not marked…` (4.8), plugin warnings. One file per day across all sessions. |
 | `logs/amass/enum/<date>-enum-<id>.log` | Everything logged through `e.Session.Log()`: relationships discovered, horizontals scope additions (6.6), sweep and session-end lines. One file per run. |
 
+Lines logged through a session logger carry a `session=<uuid>` field;
+lines from a plugin's registry logger (`IP-THC CSV`, `lookup failed; not
+marked…`, `Plugin started`) do not, so filter those by time instead. On a
+shared engine log, always filter by session ID, not by `find -mmin`:
+`-mmin` selects whole files, and the engine file holds every session of
+the day.
+
 Looking for a plugin's failures in an enum log finds nothing, which looks
 like success. Search the engine log for those, and only the recent days'
 files: they are tens of MB each.
@@ -1682,14 +1761,20 @@ is that re-examination, not a mid-run scope mutation.
   including IPs only out-of-scope names resolve to. That is harmless only
   because admission needs an in-scope name (6.2). Any future admission
   path must keep a scope signal; size alone is not one (6).
-- Horizontals' `processIPNetRecord` puts the registrant organisation of
-  any in-scope netblock into scope. With the 6.2 gate a target hosted on
-  a small provider block can still pull that provider's organisation in.
-  Watch the scope-addition lines (6.6) if a run grows unexpectedly.
+- (Fixed in 1.1, 13.4.4: horizontals' `processIPNetRecord` used to put
+  the registrant organisation of any in-scope netblock into scope, so a
+  target hosted on a provider block pulled the provider in. An in-scope
+  record now expands its registrant only when a contact email is on a seed
+  domain.)
 - (Fixed 10-10: Protocol-Probes leaf certificates were dispatched without
   the parsed certificate, so their SANs were discarded. See 4.2.)
 
-## 10.6 Active-egress gaps (pre-merge)
+## 10.6 Active-egress gaps (pre-merge) — RESOLVED in 1.1
+
+All three gaps below were closed by the 1.1 port (13.1): every active path
+takes its dialer or HTTP client from `support.ActiveDialer` /
+`support.ActiveHTTPClient`, and the nil-means-direct fallbacks were
+removed, so a missing dialer fails closed. The text is kept as history.
 
 For the pending `feature/active-proxy-egress` merge, five target-touching
 egress paths exist. Two are already handled by that branch
@@ -1801,6 +1886,16 @@ FROM entity_tag t JOIN entity e ON e.entity_id = t.entity_id
 JOIN entity_type_lu lu ON lu.id=e.etype_id AND lu.name='fqdn'
 WHERE t.property_name <> 'last_monitored' GROUP BY 1 ORDER BY 2 DESC;
 
+-- On a production-sized database, write queries that only use indexed
+-- equality lookups, and set a timeout (SET statement_timeout = '60s').
+-- A range test such as record_cidr >>= block cannot use an index and
+-- ran past 10 minutes; enumerate the candidate supernets instead:
+--   SELECT ... FROM (SELECT set_masklen('203.17.34.0/24'::cidr, n) AS super
+--                    FROM generate_series(8, 24) n) s
+--   JOIN public.ipnetrecord r ON r.record_cidr = s.super;
+-- ipnetrecord.handle and record_cidr are UNIQUE; entity (table_name,
+-- row_id) and edge (from_entity_id) / (to_entity_id) are indexed.
+
 -- IP-THC: scope the join. Do not seq-scan entity_tag.property_value.
 SELECT count(*) FROM fqdn_by_domains(current_setting('my.domains', true)) f
 JOIN entity e ON e.etype_id = 7 AND e.row_id = f.id
@@ -1834,6 +1929,10 @@ runs** with one variable changed.
 | Pipeline | Pos | Handler | Instances | Stage type |
 |---|---|---|---|---|
 | IPAddress | 2 | BGP.Tools netblock | 4 | FIFO/Pool |
+| IPAddress | 4 | IP-Netblock (waits up to 30 s for the BGP prefix; not for unrouted /24s, 13.7) | — | — |
+| IPAddress | 5 | **RDAP per-IP** (1.1, 13.4.7) | 4 | DynamicPool |
+| IPAddress | 8 | DNS-Reverse | — | — |
+| IPAddress | 10 | Horizontals IP | — | — |
 | IPAddress | 22 | **IP-THC IP** | 16 | DynamicPool |
 | IPAddress | 41 | **port_prefilter** | 32 | DynamicPool |
 | IPAddress | 42 | http_probes ipaddr | 32 | DynamicPool |
@@ -1849,7 +1948,12 @@ runs** with one variable changed.
 | Service | 44 | **techstack** | 16 | DynamicPool |
 
 Bold = added or substantially modified by this fork. Italic instance
-counts = declared but ignored because the position is shared. The bypass
+counts = declared but ignored because the position is shared. **Exclusive
+handlers need a unique position per event type**: two at the same
+position make the plugin's `Start` fail and the engine never becomes
+healthy (that happened once in 1.1, 13.4.7). `engine/plugins/load_test.go`
+starts every plugin against a real registry and fails on such a
+conflict; run it after adding a handler. The bypass
 gate sends discovered names from before 20 straight to the first stage
 after 40 (6.5).
 
@@ -1876,6 +1980,16 @@ after 40 (6.5).
 | `lookupFailureInterval` | 1 minute per plugin | `support/lookup.go` |
 | Prospeo `max_emails_per_domain` / `min_remaining_credits` | 25 / 0 | `datasources.yaml` options |
 | Container `nofile` | 8192 | `compose.yaml` |
+| `maxAnnouncedNetblocksForScope` (ASN fan-out backstop, 1.1) | 500 | `horizontals/plugin.go` |
+| `MaxRecordsPerLocation` (shared-address cap, 1.1) | 25 | `support/shared_location.go` |
+| `maxRDAPRangePrefixes` (per-IP RDAP range split, 1.1) | 8 | `api/rdap/ipaddr.go` |
+| `maxRegisteredNetblocks` (netblocks per record walked, 1.1) | 64 | `horizontals/plugin.go` |
+| `maxAdmittedNetblocks` (owned record's netblocks admitted, 1.1) | 256 | `api/rdap/ipnet.go` |
+| `storeItemTimeout` (per stored name, 1.1) | 15 s | `support/database.go` |
+| `detachedWriteTimeout` (write guard, 1.1) | 5 min | `sessions/write_guard.go` |
+| `BrokenReverseZoneFailures` (per /24, 1.1) | 5 | `support/reverse_dns.go` |
+| `BrokenForwardZoneNames` (distinct names per zone, 1.1) | 10 | `support/reverse_dns.go` |
+| `ownedFillMaxBacklog` / `ownedFillCheckEvery` (1.1) | 2048 / 64 | `support/owned_netblock.go` |
 
 # Appendix C — Production deployment model
 
@@ -1886,8 +2000,7 @@ and inhibiting new launches near a red line.
 
 All OSINT and DNS traffic egresses directly. All **active** traffic —
 anything touching a target asset — must egress through a user-specified
-proxy (Tor or residential), enforced once
-`feature/active-proxy-egress` is merged. DNS is explicitly **not**
+proxy (Tor or residential). This is enforced on `hypermass-1.1` (13.1). DNS is explicitly **not**
 active traffic, by policy: simple DNS queries are indistinguishable from
 background noise, whereas port and service probing is a detectable,
 attributable reconnaissance signal.
@@ -1922,3 +2035,418 @@ The first release is **Hypermass 1.0**, tag `hypermass-v1.0.0`
   banner and visualisations. Rebranding those is a separate, small patch.
 - Older fork tags: `sd-freeze-2026-09-10`, the last known-good
   `service-detection` before the active-proxy merge work.
+- **1.1 is not tagged yet.** `hypermass-1.1` is the development branch.
+  When it is released, tag `hypermass-v1.1.0` on its head and write the
+  notes from Part 13. Until then, build from the branch ref
+  (`…/hypermass.git#hypermass-1.1`).
+
+---
+
+# Part 13 — `hypermass-1.1`: everything since release 1.0
+
+Merged as PRs #11–#29 (`2b6b3936` … `e521102b`). Each section names the
+commits, the files, and the run that exposed the problem. Measurements are
+from the operator's runs against real targets; targets are named because
+the incidents are referred to by name in commits and discussion.
+
+## 13.1 Active egress through an operator proxy (PRs #11, #12)
+
+Operator guide: `docs/active_proxy_egress.md`. Design rules:
+
+- **Every `-active` connection** (port connect scans on both pipelines,
+  HTTP probes, Protocol-Probes banner peeks and TLS certificate harvests,
+  JARM) takes its dialer or client from **one decision point**:
+  `support.ActiveDialer(sess, timeout)` / `support.ActiveHTTPClient(sess)`
+  (`support/active.go`).
+  - `active_proxy` set → the proxy dialer/client (SOCKS5/`socks5h`, HTTP
+    CONNECT, `internal/net/active_egress.go`);
+  - no proxy and `active_strict` (default **true**) → `ErrNoActiveEgress`,
+    the operation is skipped and logged;
+  - no proxy and not strict → a direct dialer / the Probe client.
+- **Fail closed everywhere.** The old nil-means-direct fallbacks in
+  `scanPorts`, `PeekBanner` and `dialAndGetCertChain` are gone; a nil
+  dialer scans nothing. JARM is gated on `-active` like the other probes.
+- **DNS is never proxied**, by policy (Appendix C), and neither are passive
+  data sources. The source branch's `active_dns_resolver` was not ported.
+- **Start-up health check.** `ActiveEgress.HealthCheck` probes the proxy
+  before any work is dispatched; a dead proxy, or `-active` with strict
+  and no proxy, refuses session creation (logged, and the API error
+  details reach `oam_enum`).
+- **No mid-run kill** (PR #12). A proxy that dies mid-run makes active
+  operations fail; nothing goes out directly. Stopping affected engines is
+  an external monitor's job. `ProxyError` and the SOCKS/CONNECT classifier
+  remain for the start-up check. SOCKS5 reply 0x06 "TTL expired" (Tor's
+  filtered port) is a target answer, not a proxy failure.
+- **Config:** `active_proxy`, `active_strict`. CLI: `-active-proxy`,
+  `-active-strict`. `Config.CheckActiveEgress` holds the policy with no
+  side effects; the API handler calls only that, so `-active-strict=false`
+  behaves exactly like `service-detection` (`CheckSettings` rewrites
+  wordlists and must not run on API sessions).
+- Proxy per-dial timeout 6 s (3× the 2 s direct connect-scan timeout).
+
+## 13.2 Engine API (PRs #13, #14, #18)
+
+- **`docs/engine_api.md`** documents every endpoint for orchestrator
+  authors: job lifecycle as `oam_enum` performs it (create, log stream,
+  seeds, idle detection, end-work, terminate), the session config schema
+  (including the `net.IPNet` form `scope.cidrs` needs), assets, the log
+  stream, fleet operation. Swagger (`docs/docs.go`, `docs/swagger.yaml`)
+  regenerated with swag v1.16.6.
+- **Four fixes:** bulk asset add no longer panics the engine on an asset
+  the database refuses (nil entity dereference in a goroutine); the single
+  asset handler returns 500/400 instead of dropping the connection; a
+  config without `scope` gets 400 instead of a panic; the WebSocket log
+  stream no longer leaks goroutines per message after a client leaves
+  (`pubsub/logger.go`: one queue and pump per subscriber, `Unsubscribe`,
+  the handler reads the connection and ends on disconnect or 60 s without
+  pong).
+- **`enum -scope-json`** (`internal/enum/scope_json.go`). The session
+  scope lives only in engine memory and is gone when the session ends.
+  The flag prints, just before termination (also on Ctrl-C and under
+  `-silent`), one line: `HYPERMASS_SCOPE {"session":…,"fqdn":[…],
+  "netblock":[…],"autonomoussystem":[…],"ipaddress":[…]}`. Lists sorted;
+  a type that could not be read is listed under `"errors"`.
+  `enum-companies.py` captures it for the report's Scope tabs.
+
+## 13.3 DNS resolver override (PR #16)
+
+Environment variables read by the engine at start-up
+(`support/resolvers.go`), each falling back to the built-in behaviour:
+
+| Variable | Meaning |
+|---|---|
+| `AMASS_ENGINE_RESOLVERS` | comma-separated resolver IPs, or a path to a file with one per line, replacing the built-in baseline list |
+| `AMASS_ENGINE_RESOLVER_QPS` | aggregate queries/second cap across the whole trusted pool (0/unset = no cap) |
+| `AMASS_ENGINE_WILDCARD_RESOLVER` | resolver for wildcard detection (default 8.8.4.4) |
+
+A start-up line `trusted DNS resolvers: …` reports the choice, with a
+warning if an override was set but held no valid address.
+
+> **Not merged:** local branch `feat/resolver-per-ns-ceiling` (`4306bcc0`)
+> raises the resolve library's fixed per-nameserver ceiling (~10 qps per
+> record type) for an override list with a QPS budget, via a wrapper
+> nameserver (`support/fast_resolver.go`). It was built and tested but
+> never applied; ask before reviving it.
+
+## 13.4 Scope: what grows it, and what now stops it
+
+This was most of the 1.1 work. Read it before touching `horizontals/`,
+`ip_netblock.go`, `whois/`, `api/rdap/` or `sessions/scope/`.
+
+### 13.4.1 How scope grows (the paths)
+
+| Path | Where | What it admits |
+|---|---|---|
+| Seeds | config `scope.domains`, `cidrs`, `asns`, `ips` | distance 0 |
+| Registration records | `horizontals/reg_records.go` (`DomainRecord`, `IPNetRecord`, `AutnumRecord`) | a record whose registrant organization or address is in scope admits what it registers and expands the registrant |
+| Organization / Location walk | `horizontals/org.go`, `location.go` → `expandFromContactRecord` | from an in-scope org or address, every contact record using it, and what those records register |
+| TLS certificates | `horizontals/tls_cert.go`; `scope.Add(TLSCertificate)` adds the CN's registered domain | |
+| Association | `sessions/scope/assoc.go` (`IsAssociated`) | domain/org/address linked to in-scope evidence |
+| Netblock ownership | `support.AdmitOwnedNetblock` (RDAP contact email on a seed domain), plus session-end `FinishOwnedNetblockFills` | any size |
+| ASN fan-out | `horizontals.addASNetblocksToScope` | small (≤ /20) announced IPv4 blocks of an in-scope ASN |
+| Provenance IPs | `dns/ip.go` | the single IP an in-scope name resolves to (6.3) |
+
+**Scope matching** (`sessions/scope/`): domains by suffix; IPs inside an
+in-scope netblock or exact; netblocks by exact CIDR; **organizations by
+exact lowercase name** (Name or LegalName; the fuzzy branch never fires at
+the confidences used); locations by building number + street + city +
+province (unit ignored). Scope can only grow; nothing is removed.
+
+### 13.4.2 Shared-provider ASNs (PR #15, then revised in Phase 1)
+
+A Cloudflare-fronted single domain (vistra.com) grew to ~500 netblocks of
+CDN/cloud space and ~58k "open" ports: one admitted provider /24 led to
+the provider's organization, its ASN, and the fan-out admitted the whole
+ASN. Now:
+- an ASN announcing more than **500** netblocks
+  (`maxAnnouncedNetblocksForScope`) never enters scope, not even the AS
+  itself (`VetoSharedASN`); 16 was tried first and caught companies that
+  run their own networks (American Express 119, Bank of America 98);
+- under the cap, the fan-out admits only small (≤ /20) IPv4 blocks.
+
+There is **no provider list.** A curated list of provider ASNs was built
+(local branch `fix/scope-review`, commit `38084016`, "G") and shelved: the
+operator's position is that static lists of companies do not hold up over
+time. Prefer data-driven signals.
+
+### 13.4.3 Privacy proxies, shared addresses, role and placeholder names (PRs #17, #19, #20)
+
+From crayon.co (a WHOIS-proxy address pulled in hundreds of unrelated
+registrants) and blue.cl (grew into Salesforce Marketing Cloud):
+- **Privacy/proxy detection** (`whois/privacy_detect.go`): "On behalf of
+  <domain>", whoisproxy/domainsbyproxy/"Identity Protection Service",
+  privacy-service mail domains and their subdomains, hashed mailboxes
+  (32+ hex), per-domain stand-ins ("Registrant of example.com"), masking
+  text. Placeholder contacts are skipped in every role.
+- **Shared-address cap** (`support/shared_location.go`): an address used
+  by more than 25 records (`MaxRecordsPerLocation`) is shared — neither
+  admitted nor walked, logged once per session. Records are counted across
+  every stored variant of the same building (number, street, city,
+  province), because "Salesforce, Inc. 415 Mission St…" and "Attn:
+  Accounts Payable 415 Mission St…" are different Location entities that
+  scope matching treats as one. Shared verdicts are cached per process
+  (keyed by database identity + entity ID).
+- **Role names and non-names** (`support/role_names.go`): "Domain
+  Administrator", "Hostmaster", "DNS Admin" (every word from a role
+  vocabulary) and placeholders ("N/A", "None", "Private Person",
+  "Internet Widgits Pty Ltd", values with no letters or digits) are not
+  organizations: WHOIS and certificate storage no longer create them,
+  horizontals neither admits nor walks them.
+- Organization dedup no longer merges organizations on a shared address.
+
+### 13.4.4 Hosting is not ownership (PR #19)
+
+An in-scope netblock's registration record expands to its registrant only
+when the block is **attributed to the target** (a contact email on a seed
+domain, `IPNetRecordOwnedBySeed`). Being in scope because the target's
+hosts sit on it makes the target a tenant, not the owner. Otherwise the
+record is handled like an out-of-scope one: it expands only if its
+registrant is already in scope, and that decision is logged.
+
+### 13.4.5 Domains via records and certificates are queued (PR #20)
+
+`processDomainRecord` queued the DomainRecord instead of the FQDN, so a
+domain admitted by registration never got its second pass (subdomain
+OSINT). And `scope.Add(TLSCertificate)` added the certificate's CN, which
+only works when the CN is a registered domain; it now adds the CN's
+registered domain (wildcard stripped) and the org/location handlers queue
+that domain's FQDN.
+
+### 13.4.6 Phase 1 scope vetoes: evidence against (PRs #21, #22)
+
+Scope expansion used to look only for positive links. Phase 1 adds
+**vetoes**: data showing an asset about to join scope belongs to someone
+else.
+
+**Setting:** `scope_vetoes` (top-level config field, also read from the
+YAML options; `config/scope_vetoes.go`):
+- `enforce` (default, and for empty/unknown) — block;
+- `observe` — log `would decline` and keep the 1.0 behaviour;
+- `off` — skip the checks.
+
+**Framework** (`support/scope_decision.go`):
+- `support.Decline(sess, reason, type, asset, plugin, kv…) bool` logs
+  `scope decision` once per session/reason/asset (`action=declined` or
+  `would decline`, `reason=…`, evidence fields) and returns whether to
+  block. Reasons: `VetoResolutionOnly`, `VetoForeignRegistrant`,
+  `VetoMergedCertificate`, `VetoSharedASN`.
+- **Provenance:** `RecordScopeAddition(sess, asset, from)` keeps the
+  shortest distance from the seeds (seeds 0; −1 unknown). Horizontals and
+  association log `via=`, `from=`, `distance=` on every addition.
+  Organization distance is keyed by normalized name (scope matches
+  organizations by name and several entities share one); blocks admitted
+  by ownership are one step from the seed domain of the matching email.
+  **Distance is recorded, not yet enforced** (Phase 3).
+- Per-session state is dropped when the session ends
+  (`support.ForgetSession`, called from the engine's shutdown hook).
+  Process-wide verdict caches are keyed by database identity + entity ID
+  (`entityCacheKey`), because entity IDs are unique only per database.
+
+**N2 — resolution alone no longer admits a netblock.** `ip_netblock.go`
+and `bgptools/netblock.go` decline the "small block + in-scope name"
+admission (`VetoResolutionOnly`). That gate admitted Cloudflare, AWS,
+Akamai and Salesforce blocks (~80,000 third-party addresses for blue.cl).
+Ownership is decided by registration:
+- `support.RegistrationVerdict(ctx, sess, rec)` on an `IPNetRecord` or
+  `AutnumRecord`: **owner** (a contact email on a seed domain, or a
+  registrant organization in scope at confidence 100); **foreign** (a real
+  registrant organization, not role/placeholder/care-of, not in scope,
+  *and* a contact email on a non-freemail domain not in scope); otherwise
+  **no information**.
+- Horizontals declines a foreign record where it would otherwise admit
+  what it registers or expand its registrant (`DeclineForeignRegistration`).
+  Seeded CIDRs and ASNs are never declined.
+- The target's own IPs are still authorized one at a time (6.3).
+
+**N1 — explicit statements in the record.** Care-of and mail-drop text
+(`c/o`, `care of`, `PMB 255`, `#` + 5 or more digits; `support/care_of.go`)
+marks an address as not the registrant's: WHOIS and RDAP contact storage
+keep the organization and email but do not link the address, and a stored
+care-of address counts as shared at once (registered agents are caught on
+an empty database). Care-of text in an organization field drops the
+organization.
+
+**M — merged certificates** (`support/merged_cert.go`). asset-db stores
+certificates unique by serial number, and default/self-signed certificates
+reuse serials, so one stored certificate can merge unrelated ones (a
+serial-1 record linked 84 organizations). A certificate whose CNs span more
+than one registered domain, or whose subject contacts name more than one
+real organization, is not used by the certificate, organization or address
+handlers, or by scope association (through `scope.SkipAssociationEvidence`,
+a hook support registers because `scope` cannot import `support`).
+Certificate contact records are keyed by issuer and subject as well as
+serial.
+
+### 13.4.7 Per-IP RDAP (Phase 1)
+
+The netblock handler queries RDAP with each IP's BGP prefix, which for an
+Internet provider's aggregate returns the provider's record, so a block
+reassigned to the target inside it was never seen. `api/rdap/ipaddr.go`
+(IPAddress **position 5**, after IP-Netblock at 4) queries RDAP **by
+address** for IPs an in-scope name resolves to:
+- skipped for non-routable addresses, addresses inside an in-scope
+  netblock, and addresses an earlier answer this session already covers
+  (`RDAPRangeKnown`);
+- the answer's range is split into CIDR blocks (at most 8,
+  `RangeToPrefixes`); blocks **more specific than the BGP prefix** (or
+  ≥ /16 IPv4, ≥ /32 IPv6 with no BGP prefix) are stored as their own
+  Netblock with a registration record, and the normal ownership check
+  decides.
+
+It first shipped at position 41, which Port-Prefilter holds, so the
+engine failed to start (PR #22 moved it). `engine/plugins/load_test.go`
+now catches that class of bug.
+
+## 13.5 RDAP registrations stored under the range they register (PRs #23, #24)
+
+RDAP answers a query for an announced /24 with the most specific
+registration covering it, often larger (a /22 announced as four /24s). The
+netblock handler stored the record under the /24 with the /22's start and
+end addresses; asset-db **requires a record's CIDR to contain its own
+start and end**, refused it, and the error was discarded. Every such block
+lost its record, its contacts and therefore its ownership, on every run
+(First Data's Asia-Pacific space for Fiserv: 198.184.0.0/21,
+203.17.32.0/22, 202.14.196.0/22, all with fiserv.com contacts).
+
+Now (`api/rdap/netblock.go`):
+- the record is stored under the **largest CIDR inside the RDAP range
+  that contains the netblock** (`registeredPrefix`; no limit on how many
+  blocks the range splits into); the netblocks it covers share one record,
+  each with its own `registration` edge;
+- within the 30-day TTL the record is found by the **netblock's own
+  registration edge**, not by CIDR; a netblock marked looked-up with no
+  record is queried again;
+- a record that cannot be stored is logged (`RDAP registration record not
+  stored`, with the reason) and the netblock is not marked;
+- the handler re-runs the ownership check when it links a netblock to a
+  record, so a /24 linked after its siblings is still attributed;
+- `admitParentNetblock` checks the record's ownership **once** before
+  walking its linked netblocks (cap 256), so a provider record shared by
+  many netblocks is never walked block by block;
+- horizontals find a record's netblocks by incoming registration edges
+  (cap 64, `getRegisteredNetblockEntities`); an owned record counts as in
+  scope when one of its linked netblocks is;
+- `AdmitOwnedNetblock` attributes each block **once per session**; it ran
+  for every address in a block before, repeating the walk and the log line
+  hundreds of times.
+
+Known gap: an RDAP answer with only one of the registration / last-changed
+dates is still not stored (asset-db requires both); seen on AFRINIC and
+some APNIC records.
+
+## 13.6 The database write path (PRs #25, #26)
+
+**asset-db facts that drive this** (`repository/postgres/worker.go`):
+- one **writer** connection (`PoolMaxConns: 1`) for all writes; a pool of
+  readers;
+- the writer batches queued writes from every caller into one transaction
+  with a savepoint per write, and runs each write **under its caller's
+  context**;
+- if a caller's context expires while its statement runs, pgx cancels it
+  by **closing the connection**, and every other write in the batch fails
+  (`savepoint: conn closed`, `commit: conn closed`).
+
+**asset-db must stay as it is** (no fork, no patch, no upstream PR). So:
+- **Write guard** (`sessions/write_guard.go`): the session wraps its
+  repository; every create and delete runs under a context the caller
+  cannot cancel, bounded at 5 minutes (asset-db's own batch limit). The
+  caller still waits only as long as its own context; if that expires it
+  gets its error and the write completes in the background (writes are
+  idempotent upserts). A write whose caller already gave up is not
+  submitted. Reads pass through.
+- **Per-name deadlines** (`support/database.go`, `storeEach`):
+  `StoreFQDNsWithSource` / `StoreEmailsWithSource` gave a whole batch one
+  30 s deadline, so the first 30 s of a large answer were stored and
+  everything after failed (IP-THC returns up to 50,000 names: ~47,600 of
+  Mailchimp's were dropped). Each name now gets 15 s; failures are logged
+  once per batch (`failed to store names … failed=N stored=M error=…`).
+  `StoreFQDNsWithSourceCount` reports the failures; IP-THC uses it to
+  leave a lookup unmarked when names failed. The ~24 other callers still
+  mark regardless.
+
+**What remains:** the single writer is the throughput ceiling. During
+large owned fills writes can queue for minutes; a write that waits past
+the guard's 5 minutes still kills its batch (two seen on a 65k-address
+fill before pacing, 13.9). `context deadline exceeded` from DNS during a
+fill is a caller giving up on its write, not lost data in the batch sense,
+but the caller (e.g. DNS-Reverse creating a PTR alias) skips its work for
+that address this run.
+
+## 13.7 BGP.Tools no-route answers and unrouted networks (PR #27)
+
+BGP.Tools answers `<nil>` in the prefix field for an address no BGP route
+covers. That was parsed as an error and logged per address (896 of 909
+WHOIS errors on Blackbaud, whose 216.235.192.0/20 is mostly unannounced).
+Now:
+- `parseBGPToolsRecord` returns `errNoRoute` for `<nil>` or an empty
+  prefix (parser split out for tests);
+- a route more specific than /24 (IPv6 /48) is not carried globally, so
+  `support.RecordUnrouted` marks the address's /24 (/48) for the session;
+  BGP.Tools skips its other addresses, **IP-Netblock stops its 30-second
+  wait** for their prefix, and the network is logged once (`no BGP route
+  covers the network`);
+- **port scanning skips unrouted addresses** (`EnsureOpenPortsScanned`,
+  PR #29): no probe can reach them. They are still filled and get reverse
+  DNS, and are not marked scanned.
+
+## 13.8 DNS lookups that cannot succeed (PRs #28, #29)
+
+`PerformQuery` returns at once on NXDOMAIN or "no record of this type";
+`ErrFailedMaxDNSAttempts` means **all six attempts errored** (timeout,
+SERVFAIL). Two waste patterns, both found on owned-block fills:
+- **Reverse names got forward lookups.** DNS-Reverse creates an FQDN for
+  each address's `in-addr.arpa` name and dispatches it; DNS-IP, DNS-CNAME,
+  DNS-TXT and DNS-Subdomains then ran forward lookups on it. They now skip
+  reverse names (`support.IsReverseDNSName`).
+- **Broken reverse zones** (delegated to servers that don't answer, every
+  name SERVFAIL; most of Blackbaud's): DNS-Reverse records PTR outcomes per
+  /24 (/48); after **5** failures with none answered the zone is skipped
+  for the session (`reverse DNS zone is not answering`). Expect some
+  overshoot (a fill dispatches a whole /24, so lookups are in flight when
+  the cap trips).
+- **Broken forward zones** (internal AD/wireless zones delegated in public
+  DNS; UB's `ad.med.buffalo.edu`, `wireless.buffalo.edu`): after lookups
+  of **10 distinct names** in a zone (the name minus its first label) fail
+  with none answered, forward lookups of the zone's other names are
+  skipped (`DNS zone is not answering`). **A registered domain is never
+  capped**, only zones below it.
+
+Answered lookups (including NXDOMAIN) keep a zone open for the session.
+All state is per session, so a fixed zone is retried next run.
+
+## 13.9 Owned-fill pacing (PR #29)
+
+A fill creates addresses far faster than the pipeline works through them,
+and every address leads to further writes through the single writer
+(13.6). Every address is still filled; the fill now **pauses while the
+session's IPAddress backlog (queued + leased) is at 2,048 or more**,
+checked every 64 addresses, and logs `owned-netblock fill paused` once per
+fill; its finish line carries `paused=N`. The dashboard's `waiting` column
+is the backlog's `queued` count, the same number the pacing reads.
+
+On a repeat target the backlog is often full at the start for other
+reasons: **Known-FQDN** dispatches every name ever stored under each seed
+domain (no age limit), and their resolutions flood IPAddress. Fills then
+wait until that replay drains. That is expected.
+
+## 13.10 Open items on 1.1
+
+- **Seed name match** (proposed, on hold by the operator's decision): a
+  registrant whose normalized name equals a seed domain's label
+  ("MailChimp" for mailchimp.com) would count as owner. Mailchimp's
+  networks name "MailChimp" with contacts at intuit.com, so today they are
+  read as **foreign** and their 20 /24s are declined.
+- **Phases 2–4** of the veto plan (vendor delegation, reverse-DNS
+  operators, seed fingerprint, distance limits, GLEIF, fan-in circuit
+  breaker): see `docs/HYPERMASS_BRIEFING.md`.
+- RDAP log line `relationship discovered … relation=registration` now
+  shows the **record's** CIDR in `from=`, not the queried netblock's
+  (cosmetic; introduced by 13.5).
+- RDAP answers with only one event date are not stored (13.5).
+- Domain WHOIS is attempted on hostnames that aren't registered domains
+  (`failed to parse the WHOIS record for …trafficmanager.net`).
+- `unspecified IP addresses are not allowed`, `location city/country
+  cannot be empty` errors appear a few times per run; not traced.
+- Only IP-THC retries a lookup whose names failed to store (13.6).
+- The temporary `provenance scan authorization` Info line (6.3) is still
+  there and is the busiest log line on large runs.
