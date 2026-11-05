@@ -935,8 +935,15 @@ backlog is ≥ 2,048; unrouted addresses are not port-scanned. *Why:*
 University at Buffalo: internal AD/wireless zones produced 6,931 forward
 failures, and the 65k-address fill swamped the single writer.
 
-**Docs (this branch):** MAINTAINERS moved to `docs/` and Part 13 added;
-this briefing created.
+**PRs #30, #31 (11-04/05) — docs:** MAINTAINERS moved to `docs/` and
+updated; this briefing created, then its changelog and feature catalog
+added.
+
+**11-05 — wappalyzergo v0.3.2 → v0.3.8.** No API change; 21 more
+fingerprints and faster body matching. `golang.org/x/net` (v0.61.0, which
+0.3.8 requires) and the other `x/` modules moved with it. Same
+detections on sample responses; the Angular workaround is still needed.
+*Why:* requested by the operator (latest release).
 
 ---
 
@@ -1165,7 +1172,7 @@ on Postgres an empty seed list means no sweep at all.
 ### 14.7 Tech-Stack and product identity (`enrich/techstack.go`, `support/product.go`)
 
 **What/how.** Tech-Stack (confidence 70): Service pos 44, 16 instances,
-transform Product. Runs Wappalyzer (`wappalyzergo` v0.3.2) over a
+transform Product. Runs Wappalyzer (`wappalyzergo` v0.3.8) over a
 Service's stored headers and body (`FingerprintWithInfo`). For each app:
 Product (`Type: software`, categories in `Category`) with simple
 properties `icon`, `website`, `cpe`; `product_used` Service→Product;
@@ -1831,7 +1838,8 @@ admission must stay strict.
 ### 14.37 Dependencies (`go.mod`)
 
 - **New direct:**
-  - `projectdiscovery/wappalyzergo v0.3.2` (Tech-Stack);
+  - `projectdiscovery/wappalyzergo v0.3.8` (Tech-Stack; bumped from
+    v0.3.2 on 2026-11-05, no API change);
   - `runZeroInc/recog-go` (Protocol-Probes, fingerprints embedded);
   - `golang.org/x/sync` (singleflight).
 - **Bumped:** `x/net` (`x/net/proxy` for SOCKS5), `x/crypto`, `x/sys`,
