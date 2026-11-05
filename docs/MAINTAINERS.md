@@ -286,8 +286,8 @@ Count files when you need a number; the table below is the map.
 | Database write path (1.1) | `support/database.go` (`storeEach`), `sessions/write_guard.go` | 13.6 |
 | Unrouted networks, DNS caps, fill pacing (1.1) | `support/unrouted.go`, `support/reverse_dns.go`, `whois/bgptools/`, `dns/`, `support/owned_netblock.go`, `support/portscan.go` | 13.7–13.9 |
 
-New dependencies: `projectdiscovery/wappalyzergo` **v0.3.2** (web tech
-fingerprints; bumped from v0.2.94 — see 4.3), `runZeroInc/recog-go` (service banner fingerprints,
+New dependencies: `projectdiscovery/wappalyzergo` **v0.3.8** (web tech
+fingerprints; bumped from v0.2.94 to v0.3.2, then v0.3.8 — see 4.3), `runZeroInc/recog-go` (service banner fingerprints,
 embedded — no external service), `golang.org/x/net` (HTML tokenizer).
 
 ---
@@ -588,9 +588,12 @@ host running nginx 1.18.0 is indistinguishable from one running 1.30.4,
 because both hang off the same global `Nginx` node.
 
 **Angular version recovery (fork addition).** wappalyzergo — at every
-released version through v0.3.2 — compiles `dom` and `js` fingerprint
-rules but **never evaluates them**: `GetDOMRules()` is defined and called
-nowhere in the match path, and `js` rules need a JS runtime. Angular
+released version through v0.3.8 — never evaluates `dom` and `js`
+fingerprint rules in the static match path (`FingerprintWithInfo`):
+`GetDOMRules()` is not called there, and `js` rules need a JS runtime.
+From v0.3.x the DOM rules are compiled only for the runtime path
+(`FingerprintWithRuntime`, fed by a headless browser), which Hypermass
+does not use. Angular
 (2+) is defined in the signature data with *only* `js` and `dom` rules,
 so the library detects modern Angular **not at all** from a static
 response — not merely without a version. `techstack.go` supplements this:
@@ -617,7 +620,7 @@ versioned HTML comments — all static. Angular is the one framework where
 a DOM attribute made the version statically recoverable, hence the
 special-case handler.
 
-**wappalyzergo v0.3.2 (bumped from v0.2.94).** Straight dependency bump;
+**wappalyzergo v0.3.8 (v0.2.94 → v0.3.2 → v0.3.8).** Straight dependency bumps;
 `New`, `FingerprintWithInfo`, `FormatAppVersion`, and the `AppInfo`
 struct are unchanged, so no calling code changed. The bump pulled newer
 `golang.org/x/{net,crypto,text,tools}` transitively. It does **not** fix
@@ -625,6 +628,17 @@ the dead `dom` path — that gap is why the Angular handler above exists.
 v0.3.x also adds `FingerprintWithRuntime` (a `Collector` seam for
 browser-runtime evidence), unused here but the future hook for
 JS-rendered detection.
+
+The v0.3.8 bump (2026-11-05) changes no exported API. It adds 21
+fingerprints (7,641 → 7,662) and a literal prefilter that speeds up body
+matching. It requires `golang.org/x/net` v0.61.0, so `x/net` (used by
+the active-egress SOCKS5 dialer, 13.1) and the other `x/` modules moved
+with it; the active-egress proxy tests pass on it. Its `headless`
+subpackage pulls in go-rod, but Hypermass does not import it, so go-rod
+is neither linked nor listed in `go.mod`. Checked on sample responses
+(Nginx, Apache, IIS/ASP.NET, WordPress + jQuery, Cloudflare): the same
+products and versions as v0.3.2; SSR Angular is still found only by
+`detectAngular`.
 
 **Product identity (fixed 10-09).** Product IDs and ProductRelease names
 are lowercased (`support.ProductID`, `support.ProductReleaseName`), so

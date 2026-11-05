@@ -29,7 +29,7 @@ require (
 	github.com/owasp-amass/open-asset-model v0.15.1-0.20260306015734-5261c591eef2
 	github.com/owasp-amass/resolve v0.10.0
 	github.com/pioz/countries v0.2.2
-	github.com/projectdiscovery/wappalyzergo v0.3.2
+	github.com/projectdiscovery/wappalyzergo v0.3.8
 	github.com/runZeroInc/recog-go v0.1.1-0.20230801014443-aa6fe9074750
 	github.com/samber/slog-common v0.22.0
 	github.com/samber/slog-syslog/v2 v2.5.4
@@ -37,8 +37,8 @@ require (
 	github.com/swaggo/swag v1.16.6
 	github.com/tylertreat/BoomFilters v0.0.0-20251117164519-53813c36cc1b
 	github.com/yl2chen/cidranger v1.0.2
-	golang.org/x/net v0.58.0
-	golang.org/x/sync v0.22.0
+	golang.org/x/net v0.61.0
+	golang.org/x/sync v0.24.0
 	golang.org/x/time v0.15.0
 	gopkg.in/ini.v1 v1.67.1
 	gopkg.in/yaml.v3 v3.0.1
@@ -112,13 +112,13 @@ require (
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90 // indirect
-	golang.org/x/mod v0.38.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/telemetry v0.0.0-20260708182218-49f421fb7959 // indirect
-	golang.org/x/text v0.41.0 // indirect
-	golang.org/x/tools v0.48.0 // indirect
+	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
+	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/tools v0.51.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260406210006-6f92a3bedf2d // indirect
 	google.golang.org/grpc v1.80.0 // indirect
