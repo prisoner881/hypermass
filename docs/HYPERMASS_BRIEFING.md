@@ -590,9 +590,14 @@ no Postgres. Use HTTPS services:
 
 ## 12. Operator tooling outside the repository
 
-`enum-companies.py` and `report-enumerated.py` live in
-`~/amass-docker-compose` on the host, not in Git. `dashboard.py` is in the
-repository under `utility/`.
+The operator runs these from `~/amass-docker-compose` on the host. Copies
+are kept in the repository under `utility/`: `dashboard.py`,
+`enum-companies.py`, `report-enumerated.py`, `update-domains.py`, and the
+operator's `config.yaml` and `datasources.yaml`. **The repository is
+public, so every password and API key in those copies is `CHANGE_ME`**;
+the working copies on the host hold the real values. Never commit the
+real ones. A repository copy runs only after its placeholders are
+filled in.
 
 - **`enum-companies.py`** — runs enumerations one company at a time from
   the database's `companies` and `domains` tables. Pick order: never
@@ -610,8 +615,13 @@ repository under `utility/`.
   queue on any non-zero exit from `oam_enum`. Ctrl-C writes a partial
   report.
 - **`report-enumerated.py`** — rewrites reports for every enumerated
-  company (up to 5 at once, 15-minute limit each), reusing
-  `enum-companies.py`'s report code.
+  company (`MAX_CONCURRENT_REPORTS` at once, currently 10; 15-minute limit
+  each), reusing `enum-companies.py`'s report code.
+- **`update-domains.py`** — syncs `public.companies` and `public.domains`
+  from the company-domain CSV (`ID, Name, Domain, Is Root?, Run
+  Schedule`), with a preview and a y/N confirmation, in one transaction.
+  `last_enum` is cleared only for a new company or one whose domains
+  gained a name or changed `is_root`.
 - **`utility/dashboard.py`** — the live terminal dashboard (backlog
   buckets, NetSem/ScanSem, prefilter counts, and an end-work row per
   phase: `requeue (batch)` or `requeue (walk)`, progress, rate/min, ETC)

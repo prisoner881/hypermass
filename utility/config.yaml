@@ -1,0 +1,182 @@
+scope:
+#  domains: # registered domain names in scope
+#    - owasp.org
+#  ips: # IP addresses in scope, multiple methods of inserting IP addresses can be used
+#    - 192.0.2.1
+#    - 192.0.2.2
+#    - 192.168.0.3-8
+#    - 192.168.0.10-192.168.0.20
+#  cidrs: # CIDR ranges that are in scope
+#    - 192.0.2.0/24
+#    - 192.0.2.128/25
+  ports: # nmap top 100 TCP ports (by frequency), sourced from the
+         # real nmap-services file - a subset of the same top-1000
+         # data, reduced after confirming file-descriptor pressure at
+         # the top-1000/raised-concurrency combination
+    - 7
+    - 9
+    - 13
+    - 21
+    - 22
+    - 23
+    - 25
+    - 26
+    - 37
+    - 53
+    - 79
+    - 80
+    - 81
+    - 88
+    - 106
+    - 110
+    - 111
+    - 113
+    - 119
+    - 135
+    - 139
+    - 143
+    - 144
+    - 179
+    - 199
+    - 389
+    - 427
+    - 443
+    - 444
+    - 445
+    - 465
+    - 513
+    - 514
+    - 515
+    - 543
+    - 544
+    - 548
+    - 554
+    - 587
+    - 631
+    - 646
+    - 873
+    - 990
+    - 993
+    - 995
+    - 1025
+    - 1026
+    - 1027
+    - 1028
+    - 1029
+    - 1110
+    - 1433
+    - 1720
+    - 1723
+    - 1755
+    - 1900
+    - 2000
+    - 2001
+    - 2049
+    - 2121
+    - 2717
+    - 3000
+    - 3128
+    - 3306
+    - 3389
+    - 3986
+    - 4899
+    - 5000
+    - 5009
+    - 5051
+    - 5060
+    - 5101
+    - 5190
+    - 5357
+    - 5432
+    - 5631
+    - 5666
+    - 5800
+    - 5900
+    - 6000
+    - 6001
+    - 6646
+    - 7070
+    - 8000
+    - 8008
+    - 8009
+    - 8080
+    - 8081
+    - 8443
+    - 8888
+    - 9100
+    - 9999
+    - 10000
+    - 32768
+    - 49152
+    - 49153
+    - 49154
+    - 49155
+    - 49156
+    - 49157
+#  blacklist: # subdomains to be blacklisted
+#    - example.owasp.org
+options:
+  datasources: "./datasources.yaml"
+  engine: "http://engine:4000"
+  # be sure to set your username and password in the following URI to the 
+  # AMASS_USER and AMASS_PASSWORD values, respectively, in your .env file
+  # database: "bolt://neo4j:amass4OWASP@neo4j:7687/neo4j"
+  database: "postgres://amass:CHANGE_ME@192.168.1.125:5432/assetdb"
+  bruteforce:
+    enabled: false
+    wordlists: # wordlist(s) to use that are specific to brute forcing
+      - "./wordlists/short-wordlist.txt"
+      #- "./wordlists/subdomains-top1mil-5000.txt"
+      #- "./wordlists/subdomains-top1mil-20000.txt"
+      #- "./wordlists/subdomains-top1mil-110000.txt"
+  alterations:
+    enabled: false
+    wordlists: # wordlist(s) to use that are specific to name alterations
+      - "./wordlists/alterations.txt"
+  default_transform_values:
+    ttl: 10800 # minutes. If not specified, the default is 1440 minutes (1 day)
+    confidence: 50 # 50%
+    priority: 5
+
+transformations:
+  Account->ALL:
+    ttl: 10800 # 7 days
+  AutnumRecord->ALL:
+  AutonomousSystem->ALL:
+  AutonomousSystem->RDAP:
+    ttl: 43200 # 30 days
+  ContactRecord->ALL:
+  DomainRecord->ALL:
+  File->ALL:
+  FQDN->ALL:
+  FQDN->DomainRecord:
+    ttl: 43200 # 30 days
+  FundsTransfer->ALL:
+    ttl: 10800 # 7 days
+  Identifier->ALL:
+  Identifier->GLEIF:
+    ttl: 43200 # 30 days
+  Identifier->RDAP:
+    ttl: 43200 # 30 days
+  IPAddress->ALL:
+  IPAddress->Port-Prefilter:
+  IPNetRecord->ALL:
+  Location->ALL:
+    confidence: 80
+  Netblock->ALL:
+  Netblock->RDAP:
+    ttl: 43200 # 30 days
+  Organization->ALL:
+  Organization->GLEIF:
+    ttl: 43200 # 30 days
+  Person->ALL:
+    ttl: 43200 # 30 days
+  Phone->ALL:
+    ttl: 10800 # 7 days
+  Product->ALL:
+    ttl: 10800 # 7 days
+  ProductRelease->ALL:
+  Service->ALL:
+  TLSCertificate->ALL:
+    ttl: 10800 # 7 days
+  URL->ALL:
