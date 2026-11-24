@@ -70,7 +70,8 @@ agreed design.
 | Item | Value |
 |---|---|
 | GitHub | `prisoner881/hypermass` |
-| Active branch | **`hypermass-1.1`** (all new work targets it) |
+| Active branch | **`hypermass-1.2`**, branched from `hypermass-1.1` at `f4e002e3`; the operator's `compose.yaml` builds from it |
+| Previous branch | `hypermass-1.1` (PRs #11–#32), the base of 1.2 |
 | Frozen branch | **`service-detection`** at **`176be5e5`** — release 1.0 plus the MAINTAINERS upload. **Never commit to it, never touch it.** Verify it after every merge. |
 | Release tag | `hypermass-v1.0.0` (`5041be70`). 1.1 is untagged. |
 | Operator's clone | `~/hypermass` on the host |
@@ -945,6 +946,19 @@ fingerprints and faster body matching. `golang.org/x/net` (v0.61.0, which
 detections on sample responses; the Angular workaround is still needed.
 *Why:* requested by the operator (latest release).
 
+### 13.5 Era 4 — `hypermass-1.2` (2026-11-24 →)
+
+Branched from `hypermass-1.1` at `f4e002e3`. The operator's
+`compose.yaml` builds `engine` and `enum` from this branch.
+
+**Session-end sweep: batched query restored.** PR #26's write guard hid
+the PostgreSQL repository behind `Session.DB()`, so the sweep's type check
+failed and every session walked all its Done IPs one at a time, silently
+(113,047 IPs and hours of end-work on one run). The guard now has
+`Unwrap()` and the sweep unwraps; a sweep that cannot batch logs why; a
+failed chunk sends only its own IPs to the walk (all remaining after 3
+failures in a row). *Why:* found from the dashboard's end-work row.
+
 ---
 
 ## 14. Feature catalog: everything that differs from stock Amass v5
@@ -1155,7 +1169,11 @@ found after Protocol-Probes saw them, and drop per-session state.
 - Misses on Postgres: one query per 5,000 Done IDs (90 s context): fresh
   `open_port`, no fresh `last_monitored = Protocol-Probes`, and an
   incoming `dns_record` from a name under a seed or runtime scope domain.
-  On error it falls back to a per-IP walk. SQLite always walks.
+  A chunk whose query fails sends only its IPs to a one-at-a-time walk;
+  after 3 failed chunks in a row the rest are walked. When the batch
+  cannot run at all (SQLite) every Done IP is walked, logged with the
+  reason. The repository is found by unwrapping the write guard
+  (MAINTAINERS 13.11): from PR #26 until 1.2 the batch never ran.
 - Progress: `GET /sessions/{id}/end-work` → `{done, phase, candidates,
   requeued, waiting, leased, processed}`; phases `none`, `owned-fill`,
   `idle-wait`, `listing`, `requeue`, `drain`, `done`.

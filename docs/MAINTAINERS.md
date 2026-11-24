@@ -35,7 +35,8 @@ path is still `github.com/owasp-amass/amass/v5`.
 
 | Branch | State |
 |---|---|
-| `hypermass-1.1` | **Active development.** Everything since 1.0 (PRs #11–#29). Part 13. |
+| `hypermass-1.2` | **Active development**, branched from `hypermass-1.1` at `f4e002e3` (PR #32). The session-end sweep's batched query restored (13.11). |
+| `hypermass-1.1` | Everything since 1.0 (PRs #11–#32). Part 13. The base of `hypermass-1.2`. |
 | `service-detection` | **Frozen** at `176be5e5` (release 1.0, `hypermass-v1.0.0` = `5041be70`, plus the upload of this guide). Never commit to it. |
 
 **This revision** covers everything merged to `hypermass-1.1` up to
@@ -2464,3 +2465,42 @@ wait until that replay drains. That is expected.
 - Only IP-THC retries a lookup whose names failed to store (13.6).
 - The temporary `provenance scan authorization` Info line (6.3) is still
   there and is the busiest log line on large runs.
+
+## 13.11 Session-end sweep: the batched query restored (`hypermass-1.2`)
+
+**The defect.** The sweep (9.2.1) finds the Done IPs that need a
+Protocol-Probes requeue with one PostgreSQL query per 5,000 IPs, and walks
+the IPs one at a time only when that cannot run. It decided "PostgreSQL or
+not" with a type assertion, `s.DB().(*postgres.PostgresRepository)`. PR #26
+(13.6) made `Session.DB()` return the write guard instead, so the assertion
+never matched, the batch was skipped without a log line, and **every
+session from PR #26 on walked all its Done IPs one at a time**: 113,047 IPs
+and hours of end-work on one run, instead of seconds.
+
+**Fixes** (`sessions/write_guard.go`, `protocol_probes/sweep_query.go`,
+`sweep.go`):
+- The guard has `Unwrap()`; `postgresSQL` unwraps through any wrapper
+  (`repositoryUnwrapper`) before the type check. Reads only; writes still
+  go through the guard. **Never type-assert `Session.DB()` directly.**
+- When the batch cannot run at all, the sweep logs Warn `batched miss-list
+  query not available; checking every Done IP one at a time` with `reason`
+  and `done_ips`. A successful batch logs `batch miss-list query` with
+  `done_ips`, `misses`, `failed_chunks`, `walk_ips`.
+- A chunk whose query fails sends only its own IPs to the walk (Warn
+  `miss-list query failed for a chunk…`, with `chunk`, `chunks`, `ips`,
+  `error`); the other chunks' answers are kept. After
+  `maxConsecutiveChunkFailures` (3) failures in a row the remaining IPs go
+  to the walk without further queries. Batched misses are requeued first,
+  then the walk IPs, which get the walk's filters. `candidates` (end-work
+  progress) is misses + walk IPs.
+
+**Tests:** `protocol_probes/sweep_fallback_test.go` (unwrapping, chunk
+failures, the whole sweep on SQLite and with a stubbed batch) and
+`TestWriteGuardUnwrapsToTheWrappedRepository`.
+`TestSweepBatchedAgainstPostgres` runs the real query against PostgreSQL
+when `HYPERMASS_TEST_POSTGRES_DSN` names a scratch database
+(`postgres://user:pass@host:5432/dbname`, no query string; asset-db
+creates its schema there).
+
+**Dashboard:** `dashboard.py` labels the row `requeue (batch)` when
+`candidates` ≤ 500 and `requeue (walk)` otherwise.

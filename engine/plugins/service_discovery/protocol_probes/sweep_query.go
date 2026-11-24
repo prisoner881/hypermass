@@ -8,11 +8,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
 	et "github.com/owasp-amass/amass/v5/engine/types"
+	"github.com/owasp-amass/asset-db/repository"
 	"github.com/owasp-amass/asset-db/repository/postgres"
 )
 
@@ -76,31 +78,76 @@ LIMIT $5
 // cold cache (about 1ms per IP in the worst case measured).
 var missListChunk = 5000
 
-func postgresSQL(s et.Session) *sql.DB {
-	if s == nil || s.DB() == nil {
-		return nil
-	}
-	p, ok := s.DB().(*postgres.PostgresRepository)
-	if !ok || p == nil {
-		return nil
-	}
-	return p.DB
+// maxConsecutiveChunkFailures is how many miss-list chunks in a row may fail
+// before the batch gives up and leaves the remaining Done IPs to the serial
+// walk. Each failure can take up to 90 seconds, so a query that cannot work
+// at all (a schema or permission problem) should not be retried on every
+// chunk.
+const maxConsecutiveChunkFailures = 3
+
+// runMissListQuery runs one miss-list chunk. Tests replace it.
+var runMissListQuery = missListQuery
+
+// repositoryUnwrapper is implemented by repository wrappers that hold the
+// asset-db repository underneath, such as the session's write guard.
+type repositoryUnwrapper interface {
+	Unwrap() repository.Repository
 }
 
-// missListBatch returns entity IDs that need Protocol-Probes requeue.
-// batched=false means the caller should use the serial walk (not postgres,
-// empty input, or no seed domains). A non-nil error means try the walk.
-func missListBatch(s et.Session, doneIDs []string, prefilterSince, protoSince time.Time) (ids []string, batched bool, err error) {
+// postgresSQL returns the *sql.DB of the session's PostgreSQL repository, or
+// nil when the session does not use PostgreSQL. Session.DB() is wrapped (the
+// session's write guard), so it unwraps until it reaches the asset-db
+// repository; asserting the type on Session.DB() alone never matches.
+func postgresSQL(s et.Session) *sql.DB {
+	if s == nil {
+		return nil
+	}
+	repo := s.DB()
+	for i := 0; i < 8 && repo != nil; i++ {
+		if p, ok := repo.(*postgres.PostgresRepository); ok {
+			if p == nil {
+				return nil
+			}
+			return p.DB
+		}
+		u, ok := repo.(repositoryUnwrapper)
+		if !ok {
+			return nil
+		}
+		repo = u.Unwrap()
+	}
+	return nil
+}
+
+// missListResult is the outcome of the batched miss-list query.
+type missListResult struct {
+	// misses are the Done IPs that need a Protocol-Probes requeue. The query
+	// has already applied the walk's filters to them.
+	misses []string
+	// walk are Done IPs from chunks whose query failed. The caller checks
+	// them one at a time, with the walk's filters.
+	walk []string
+	// failedChunks counts the chunks whose query failed.
+	failedChunks int
+}
+
+// missListBatch finds the Done IPs that need a Protocol-Probes requeue with
+// one query per missListChunk IPs. ok=false means the batch could not run at
+// all and the caller must check every Done IP one at a time; reason says why.
+// A chunk whose query fails sends only its own IPs to the walk; after
+// maxConsecutiveChunkFailures failures in a row, the remaining IPs go to the
+// walk too.
+func missListBatch(s et.Session, log *slog.Logger, doneIDs []string, prefilterSince, protoSince time.Time) (res missListResult, ok bool, reason string) {
 	db := postgresSQL(s)
 	if db == nil {
-		return nil, false, nil
+		return res, false, "the session database is not PostgreSQL"
 	}
 	if len(doneIDs) == 0 {
-		return nil, true, nil
+		return res, true, ""
 	}
 	seeds := sweepSeedDomains(s)
 	if len(seeds) == 0 {
-		return nil, true, nil
+		return res, true, ""
 	}
 
 	ints := make([]int64, 0, len(doneIDs))
@@ -117,24 +164,49 @@ func missListBatch(s et.Session, doneIDs []string, prefilterSince, protoSince ti
 		ints = append(ints, n)
 	}
 	if len(ints) == 0 {
-		return nil, true, nil
+		return res, true, ""
 	}
 
+	chunks := (len(ints) + missListChunk - 1) / missListChunk
 	seedList := strings.Join(seeds, "\n")
-	var out []string
-	for start := 0; start < len(ints) && len(out) < sweepMaxResubmit; start += missListChunk {
+	consecutive := 0
+	for start := 0; start < len(ints) && len(res.misses) < sweepMaxResubmit; start += missListChunk {
 		if s.Done() {
 			break
 		}
 		end := min(start+missListChunk, len(ints))
-		chunk, qerr := missListQuery(s.Ctx(), db, ints[start:end], seedList,
-			prefilterSince, protoSince, sweepMaxResubmit-len(out))
-		if qerr != nil {
-			return nil, false, qerr
+		found, qerr := runMissListQuery(s.Ctx(), db, ints[start:end], seedList,
+			prefilterSince, protoSince, sweepMaxResubmit-len(res.misses))
+		if qerr == nil {
+			consecutive = 0
+			res.misses = append(res.misses, found...)
+			continue
 		}
-		out = append(out, chunk...)
+
+		res.failedChunks++
+		consecutive++
+		res.walk = appendIDStrings(res.walk, ints[start:end])
+		if log != nil {
+			log.Warn("miss-list query failed for a chunk; its IPs will be checked one at a time",
+				"chunk", start/missListChunk+1, "chunks", chunks, "ips", end-start, "error", qerr.Error())
+		}
+		if consecutive >= maxConsecutiveChunkFailures {
+			res.walk = appendIDStrings(res.walk, ints[end:])
+			if log != nil {
+				log.Warn("miss-list query failed on consecutive chunks; checking the remaining Done IPs one at a time",
+					"failed_in_a_row", consecutive, "remaining_ips", len(ints)-end)
+			}
+			break
+		}
 	}
-	return out, true, nil
+	return res, true, ""
+}
+
+func appendIDStrings(dst []string, ids []int64) []string {
+	for _, id := range ids {
+		dst = append(dst, strconv.FormatInt(id, 10))
+	}
+	return dst
 }
 
 // missListQuery runs missListSQL over one chunk of Done IPs.

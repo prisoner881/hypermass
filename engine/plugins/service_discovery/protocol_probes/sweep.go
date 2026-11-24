@@ -70,84 +70,92 @@ func SweepMissedIPs(s et.Session, d et.Dispatcher) {
 
 	src := &et.Source{Name: "Protocol-Probes", Confidence: 80}
 
-	missIDs, batched, berr := missListBatch(s, ids, prefilterSince, protoSince)
-	if berr != nil {
-		log.Warn("batch miss-list query failed; falling back to per-IP walk",
-			"error", berr.Error(), "done_ips", len(ids))
-	} else if batched {
+	// misses come from the batched query, which has already applied the
+	// filters; walk holds IPs that must be checked one at a time.
+	var misses, walk []string
+	res, batched, reason := missListBatch(s, log, ids, prefilterSince, protoSince)
+	if batched {
+		misses, walk = res.misses, res.walk
 		log.Info("batch miss-list query",
-			"done_ips", len(ids), "misses", len(missIDs))
-	}
-
-	var walk []string
-	var skipFilters bool
-	if batched && berr == nil {
-		walk = missIDs
-		skipFilters = true
-		support.SetEndWorkCandidates(s, len(missIDs))
+			"done_ips", len(ids), "misses", len(misses),
+			"failed_chunks", res.failedChunks, "walk_ips", len(walk))
 	} else {
 		walk = ids
-		support.SetEndWorkCandidates(s, len(ids))
+		log.Warn("batched miss-list query not available; checking every Done IP one at a time",
+			"reason", reason, "done_ips", len(ids))
 	}
+	support.SetEndWorkCandidates(s, len(misses)+len(walk))
 	support.SetEndWorkPhase(s, "requeue")
 
 	var submitted int
-	for _, id := range walk {
-		// The session was terminated while end-work was running: stop
-		// requeueing instead of walking the rest of the Done list.
-		if s.Done() {
-			log.Info("session ended during sweep; stopping requeue")
-			return
-		}
-		if submitted >= sweepMaxResubmit {
-			log.Warn("sweep cap reached", "cap", sweepMaxResubmit)
-			break
-		}
+	capLogged := false
+	// requeue submits ids, checking each against the walk's filters unless
+	// skipFilters is set. It returns false when the session ended.
+	requeue := func(ids []string, skipFilters bool) bool {
+		for _, id := range ids {
+			// The session was terminated while end-work was running: stop
+			// requeueing instead of walking the rest of the Done list.
+			if s.Done() {
+				log.Info("session ended during sweep; stopping requeue")
+				return false
+			}
+			if submitted >= sweepMaxResubmit {
+				if !capLogged {
+					log.Warn("sweep cap reached", "cap", sweepMaxResubmit)
+					capLogged = true
+				}
+				return true
+			}
 
-		ctx, cancel := context.WithTimeout(s.Ctx(), 5*time.Second)
-		ent, ferr := s.DB().FindEntityById(ctx, id)
-		cancel()
-		if ferr != nil || ent == nil {
-			continue
-		}
-		if _, ok := ent.Asset.(*oamnet.IPAddress); !ok {
-			continue
-		}
-
-		if !skipFilters {
-			if !seedScopedIP(s, ent) {
+			ctx, cancel := context.WithTimeout(s.Ctx(), 5*time.Second)
+			ent, ferr := s.DB().FindEntityById(ctx, id)
+			cancel()
+			if ferr != nil || ent == nil {
 				continue
 			}
-			ports := support.OpenPortsForIP(s.Ctx(), s, ent, prefilterSince)
-			if len(ports) == 0 {
+			if _, ok := ent.Asset.(*oamnet.IPAddress); !ok {
 				continue
 			}
-			if support.AssetMonitoredWithinTTL(s, ent, src, protoSince) {
+
+			if !skipFilters {
+				if !seedScopedIP(s, ent) {
+					continue
+				}
+				ports := support.OpenPortsForIP(s.Ctx(), s, ent, prefilterSince)
+				if len(ports) == 0 {
+					continue
+				}
+				if support.AssetMonitoredWithinTTL(s, ent, src, protoSince) {
+					continue
+				}
+			}
+
+			ev := &et.Event{
+				Name:       string(oam.IPAddress) + ": " + ent.Asset.Key(),
+				Entity:     ent,
+				Dispatcher: d,
+				Session:    s,
+			}
+
+			var submitErr error
+			if s.Backlog().Has(ent) {
+				submitErr = d.ResubmitEvent(ev)
+			} else {
+				submitErr = d.DispatchEvent(ev)
+			}
+			if submitErr != nil {
+				log.Warn("failed to requeue IP for Protocol-Probes",
+					"ip", ent.Asset.Key(), "error", submitErr.Error())
 				continue
 			}
+			submitted++
+			support.AddEndWorkRequeued(s, 1)
+			log.Info("requeued IP for Protocol-Probes", "ip", ent.Asset.Key())
 		}
-
-		ev := &et.Event{
-			Name:       string(oam.IPAddress) + ": " + ent.Asset.Key(),
-			Entity:     ent,
-			Dispatcher: d,
-			Session:    s,
-		}
-
-		var submitErr error
-		if s.Backlog().Has(ent) {
-			submitErr = d.ResubmitEvent(ev)
-		} else {
-			submitErr = d.DispatchEvent(ev)
-		}
-		if submitErr != nil {
-			log.Warn("failed to requeue IP for Protocol-Probes",
-				"ip", ent.Asset.Key(), "error", submitErr.Error())
-			continue
-		}
-		submitted++
-		support.AddEndWorkRequeued(s, 1)
-		log.Info("requeued IP for Protocol-Probes", "ip", ent.Asset.Key())
+		return true
+	}
+	if !requeue(misses, true) || !requeue(walk, false) {
+		return
 	}
 
 	if submitted == 0 {
