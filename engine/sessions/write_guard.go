@@ -48,6 +48,15 @@ func guardWrites(r repository.Repository) repository.Repository {
 	return &writeGuard{Repository: r}
 }
 
+// Unwrap returns the repository the guard wraps. Code that needs the
+// concrete asset-db type for a read, such as the session-end sweep's batched
+// query, which uses the PostgreSQL repository's *sql.DB, unwraps through
+// this; a type assertion on Session.DB() alone sees only the guard. Writes
+// must still go through the guard.
+func (g *writeGuard) Unwrap() repository.Repository {
+	return g.Repository
+}
+
 type writeResult[T any] struct {
 	v   T
 	err error

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/owasp-amass/asset-db/repository"
+	"github.com/owasp-amass/asset-db/repository/postgres"
 	dbt "github.com/owasp-amass/asset-db/types"
 	oam "github.com/owasp-amass/open-asset-model"
 	oamdns "github.com/owasp-amass/open-asset-model/dns"
@@ -212,5 +213,23 @@ func TestWriteGuardReadsPassThrough(t *testing.T) {
 	}
 	if guardWrites(nil) != nil {
 		t.Error("guarding no repository returned a repository")
+	}
+}
+
+// Code that needs asset-db's concrete repository (the session-end sweep's
+// batched query uses the PostgreSQL repository's *sql.DB) unwraps the guard;
+// a type assertion on Session.DB() sees only the guard.
+func TestWriteGuardUnwrapsToTheWrappedRepository(t *testing.T) {
+	inner := &postgres.PostgresRepository{}
+	g := guardWrites(inner)
+	if _, ok := g.(*postgres.PostgresRepository); ok {
+		t.Fatal("the guard is itself the PostgreSQL repository; the test is meaningless")
+	}
+	u, ok := g.(interface{ Unwrap() repository.Repository })
+	if !ok {
+		t.Fatal("the write guard has no Unwrap method")
+	}
+	if got, ok := u.Unwrap().(*postgres.PostgresRepository); !ok || got != inner {
+		t.Fatalf("Unwrap returned %T %p, want the wrapped repository %p", u.Unwrap(), got, inner)
 	}
 }

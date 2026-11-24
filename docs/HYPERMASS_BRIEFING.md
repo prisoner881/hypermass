@@ -70,7 +70,8 @@ agreed design.
 | Item | Value |
 |---|---|
 | GitHub | `prisoner881/hypermass` |
-| Active branch | **`hypermass-1.1`** (all new work targets it) |
+| Active branch | **`hypermass-1.2`**, branched from `hypermass-1.1` at `f4e002e3`; the operator's `compose.yaml` builds from it |
+| Previous branch | `hypermass-1.1` (PRs #11–#32), the base of 1.2 |
 | Frozen branch | **`service-detection`** at **`176be5e5`** — release 1.0 plus the MAINTAINERS upload. **Never commit to it, never touch it.** Verify it after every merge. |
 | Release tag | `hypermass-v1.0.0` (`5041be70`). 1.1 is untagged. |
 | Operator's clone | `~/hypermass` on the host |
@@ -945,6 +946,24 @@ fingerprints and faster body matching. `golang.org/x/net` (v0.61.0, which
 detections on sample responses; the Angular workaround is still needed.
 *Why:* requested by the operator (latest release).
 
+### 13.5 Era 4 — `hypermass-1.2` (2026-11-24 →)
+
+Branched from `hypermass-1.1` at `f4e002e3`. The operator's
+`compose.yaml` builds `engine` and `enum` from this branch.
+
+**Session-end sweep: batched query restored.** PR #26's write guard hid
+the PostgreSQL repository behind `Session.DB()`, so the sweep's type check
+failed and every session walked all its Done IPs one at a time, silently
+(113,047 IPs and hours of end-work on one run). The guard now has
+`Unwrap()` and the sweep unwraps; a sweep that cannot batch logs why; a
+failed chunk sends only its own IPs to the walk (all remaining after 3
+failures in a row). *Why:* found from the dashboard's end-work row.
+
+**wappalyzergo v0.3.8 → v0.3.11.** No API change; 62 more fingerprints
+(7,724). `golang.org/x/net` moved to v0.62.0 with it. Same detections on
+sample responses; the Angular workaround is still needed. *Why:*
+requested by the operator (latest release).
+
 ---
 
 ## 14. Feature catalog: everything that differs from stock Amass v5
@@ -1155,7 +1174,11 @@ found after Protocol-Probes saw them, and drop per-session state.
 - Misses on Postgres: one query per 5,000 Done IDs (90 s context): fresh
   `open_port`, no fresh `last_monitored = Protocol-Probes`, and an
   incoming `dns_record` from a name under a seed or runtime scope domain.
-  On error it falls back to a per-IP walk. SQLite always walks.
+  A chunk whose query fails sends only its IPs to a one-at-a-time walk;
+  after 3 failed chunks in a row the rest are walked. When the batch
+  cannot run at all (SQLite) every Done IP is walked, logged with the
+  reason. The repository is found by unwrapping the write guard
+  (MAINTAINERS 13.11): from PR #26 until 1.2 the batch never ran.
 - Progress: `GET /sessions/{id}/end-work` → `{done, phase, candidates,
   requeued, waiting, leased, processed}`; phases `none`, `owned-fill`,
   `idle-wait`, `listing`, `requeue`, `drain`, `done`.
@@ -1172,7 +1195,7 @@ on Postgres an empty seed list means no sweep at all.
 ### 14.7 Tech-Stack and product identity (`enrich/techstack.go`, `support/product.go`)
 
 **What/how.** Tech-Stack (confidence 70): Service pos 44, 16 instances,
-transform Product. Runs Wappalyzer (`wappalyzergo` v0.3.8) over a
+transform Product. Runs Wappalyzer (`wappalyzergo` v0.3.11) over a
 Service's stored headers and body (`FingerprintWithInfo`). For each app:
 Product (`Type: software`, categories in `Category`) with simple
 properties `icon`, `website`, `cpe`; `product_used` Service→Product;
@@ -1838,8 +1861,9 @@ admission must stay strict.
 ### 14.37 Dependencies (`go.mod`)
 
 - **New direct:**
-  - `projectdiscovery/wappalyzergo v0.3.8` (Tech-Stack; bumped from
-    v0.3.2 on 2026-11-05, no API change);
+  - `projectdiscovery/wappalyzergo v0.3.11` (Tech-Stack; bumped from
+    v0.3.2 to v0.3.8 on 2026-11-05 and to v0.3.11 on 2026-11-24, no API
+    change);
   - `runZeroInc/recog-go` (Protocol-Probes, fingerprints embedded);
   - `golang.org/x/sync` (singleflight).
 - **Bumped:** `x/net` (`x/net/proxy` for SOCKS5), `x/crypto`, `x/sys`,

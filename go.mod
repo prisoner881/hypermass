@@ -29,7 +29,7 @@ require (
 	github.com/owasp-amass/open-asset-model v0.15.1-0.20260306015734-5261c591eef2
 	github.com/owasp-amass/resolve v0.10.0
 	github.com/pioz/countries v0.2.2
-	github.com/projectdiscovery/wappalyzergo v0.3.8
+	github.com/projectdiscovery/wappalyzergo v0.3.11
 	github.com/runZeroInc/recog-go v0.1.1-0.20230801014443-aa6fe9074750
 	github.com/samber/slog-common v0.22.0
 	github.com/samber/slog-syslog/v2 v2.5.4
@@ -37,7 +37,7 @@ require (
 	github.com/swaggo/swag v1.16.6
 	github.com/tylertreat/BoomFilters v0.0.0-20251117164519-53813c36cc1b
 	github.com/yl2chen/cidranger v1.0.2
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/time v0.15.0
 	gopkg.in/ini.v1 v1.67.1
