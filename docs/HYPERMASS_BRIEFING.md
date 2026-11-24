@@ -590,7 +590,9 @@ no Postgres. Use HTTPS services:
 
 ## 12. Operator tooling outside the repository
 
-Both live in `~/amass-docker-compose` on the host, not in Git.
+`enum-companies.py` and `report-enumerated.py` live in
+`~/amass-docker-compose` on the host, not in Git. `dashboard.py` is in the
+repository under `utility/`.
 
 - **`enum-companies.py`** — runs enumerations one company at a time from
   the database's `companies` and `domains` tables. Pick order: never
@@ -610,8 +612,13 @@ Both live in `~/amass-docker-compose` on the host, not in Git.
 - **`report-enumerated.py`** — rewrites reports for every enumerated
   company (up to 5 at once, 15-minute limit each), reusing
   `enum-companies.py`'s report code.
-- **`dashboard.py`** — the live terminal dashboard (backlog buckets,
-  NetSem/ScanSem, prefilter counts) from the engine API.
+- **`utility/dashboard.py`** — the live terminal dashboard (backlog
+  buckets, NetSem/ScanSem, prefilter counts, and an end-work row per
+  phase: `requeue (batch)` or `requeue (walk)`, progress, rate/min, ETC)
+  from the engine API. Run on the host with `sudo python3
+  utility/dashboard.py`; it uses `docker exec engine`. It copies four
+  end-work limits from the engine as constants (500 requeues, 2 min, 15
+  min, 3 h); update them if the engine's change.
 
 `is_root` exists only for ordering the domain list; it carries **no**
 special scope meaning (section 5).
