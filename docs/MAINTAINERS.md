@@ -287,8 +287,8 @@ Count files when you need a number; the table below is the map.
 | Database write path (1.1) | `support/database.go` (`storeEach`), `sessions/write_guard.go` | 13.6 |
 | Unrouted networks, DNS caps, fill pacing (1.1) | `support/unrouted.go`, `support/reverse_dns.go`, `whois/bgptools/`, `dns/`, `support/owned_netblock.go`, `support/portscan.go` | 13.7–13.9 |
 
-New dependencies: `projectdiscovery/wappalyzergo` **v0.3.8** (web tech
-fingerprints; bumped from v0.2.94 to v0.3.2, then v0.3.8 — see 4.3), `runZeroInc/recog-go` (service banner fingerprints,
+New dependencies: `projectdiscovery/wappalyzergo` **v0.3.11** (web tech
+fingerprints; bumped from v0.2.94 to v0.3.2, v0.3.8, then v0.3.11 — see 4.3), `runZeroInc/recog-go` (service banner fingerprints,
 embedded — no external service), `golang.org/x/net` (HTML tokenizer).
 
 ---
@@ -589,7 +589,7 @@ host running nginx 1.18.0 is indistinguishable from one running 1.30.4,
 because both hang off the same global `Nginx` node.
 
 **Angular version recovery (fork addition).** wappalyzergo — at every
-released version through v0.3.8 — never evaluates `dom` and `js`
+released version through v0.3.11 — never evaluates `dom` and `js`
 fingerprint rules in the static match path (`FingerprintWithInfo`):
 `GetDOMRules()` is not called there, and `js` rules need a JS runtime.
 From v0.3.x the DOM rules are compiled only for the runtime path
@@ -621,7 +621,7 @@ versioned HTML comments — all static. Angular is the one framework where
 a DOM attribute made the version statically recoverable, hence the
 special-case handler.
 
-**wappalyzergo v0.3.8 (v0.2.94 → v0.3.2 → v0.3.8).** Straight dependency bumps;
+**wappalyzergo v0.3.11 (v0.2.94 → v0.3.2 → v0.3.8 → v0.3.11).** Straight dependency bumps;
 `New`, `FingerprintWithInfo`, `FormatAppVersion`, and the `AppInfo`
 struct are unchanged, so no calling code changed. The bump pulled newer
 `golang.org/x/{net,crypto,text,tools}` transitively. It does **not** fix
@@ -640,6 +640,12 @@ is neither linked nor listed in `go.mod`. Checked on sample responses
 (Nginx, Apache, IIS/ASP.NET, WordPress + jQuery, Cloudflare): the same
 products and versions as v0.3.2; SSR Angular is still found only by
 `detectAngular`.
+
+The v0.3.11 bump (2026-11-24, `hypermass-1.2`) also changes no exported
+API. It adds 62 fingerprints (7,662 → 7,724) and requires `golang.org/x/net`
+v0.62.0, the only other module that moved. DOM rules are still used only
+by the runtime path, go-rod is still not linked, and the same sample
+responses give the same results as v0.3.8.
 
 **Product identity (fixed 10-09).** Product IDs and ProductRelease names
 are lowercased (`support.ProductID`, `support.ProductReleaseName`), so

@@ -959,6 +959,11 @@ failed and every session walked all its Done IPs one at a time, silently
 failed chunk sends only its own IPs to the walk (all remaining after 3
 failures in a row). *Why:* found from the dashboard's end-work row.
 
+**wappalyzergo v0.3.8 → v0.3.11.** No API change; 62 more fingerprints
+(7,724). `golang.org/x/net` moved to v0.62.0 with it. Same detections on
+sample responses; the Angular workaround is still needed. *Why:*
+requested by the operator (latest release).
+
 ---
 
 ## 14. Feature catalog: everything that differs from stock Amass v5
@@ -1190,7 +1195,7 @@ on Postgres an empty seed list means no sweep at all.
 ### 14.7 Tech-Stack and product identity (`enrich/techstack.go`, `support/product.go`)
 
 **What/how.** Tech-Stack (confidence 70): Service pos 44, 16 instances,
-transform Product. Runs Wappalyzer (`wappalyzergo` v0.3.8) over a
+transform Product. Runs Wappalyzer (`wappalyzergo` v0.3.11) over a
 Service's stored headers and body (`FingerprintWithInfo`). For each app:
 Product (`Type: software`, categories in `Category`) with simple
 properties `icon`, `website`, `cpe`; `product_used` Service→Product;
@@ -1856,8 +1861,9 @@ admission must stay strict.
 ### 14.37 Dependencies (`go.mod`)
 
 - **New direct:**
-  - `projectdiscovery/wappalyzergo v0.3.8` (Tech-Stack; bumped from
-    v0.3.2 on 2026-11-05, no API change);
+  - `projectdiscovery/wappalyzergo v0.3.11` (Tech-Stack; bumped from
+    v0.3.2 to v0.3.8 on 2026-11-05 and to v0.3.11 on 2026-11-24, no API
+    change);
   - `runZeroInc/recog-go` (Protocol-Probes, fingerprints embedded);
   - `golang.org/x/sync` (singleflight).
 - **Bumped:** `x/net` (`x/net/proxy` for SOCKS5), `x/crypto`, `x/sys`,
