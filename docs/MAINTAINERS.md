@@ -15,10 +15,11 @@ fixes found on large runs. Where Part 13 changes something an earlier part
 describes, the earlier part says so and points to it. The appendices are
 reference tables you'll want open while working.
 
-**Companion document.** `docs/HYPERMASS_BRIEFING.md` is a hand-off brief
-for whoever picks up development next: working conventions, the
-environment, open work, and the agreed plan for the remaining scope
-phases. Read it before changing anything.
+**Companion documents.** `docs/HYPERMASS_BRIEFING.md` explains every area
+in which Hypermass differs from Amass v5, why, and what changing it would
+affect; it also holds the working conventions, policies, open work and the
+remaining scope plan. Read it before changing anything.
+`docs/CHANGELOG.md` lists every change in date order, by release and PR.
 
 Everything here was verified against the code at the time of writing.
 Where a claim comes from a production measurement rather than the source,
