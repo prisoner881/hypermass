@@ -1381,7 +1381,8 @@ adds `ScanSem()`.
 > telemetry would add a production dependency for development-only value.
 > The code is inert, not broken.
 
-`dashboard.py` is a local operator tool, not part of the repo.
+`utility/dashboard.py` is the operator's live terminal dashboard over these
+endpoints (it runs on the host and reads the API through `docker exec`).
 
 ---
 
@@ -2508,5 +2509,5 @@ when `HYPERMASS_TEST_POSTGRES_DSN` names a scratch database
 (`postgres://user:pass@host:5432/dbname`, no query string; asset-db
 creates its schema there).
 
-**Dashboard:** `dashboard.py` labels the row `requeue (batch)` when
+**Dashboard:** `utility/dashboard.py` labels the row `requeue (batch)` when
 `candidates` ≤ 500 and `requeue (walk)` otherwise.
