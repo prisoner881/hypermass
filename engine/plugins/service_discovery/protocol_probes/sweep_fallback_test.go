@@ -422,3 +422,62 @@ func TestSweepBatchedAgainstPostgres(t *testing.T) {
 		t.Errorf("batched path not used:\n%s", out)
 	}
 }
+
+// The batch summary reports the slowest chunk, for tuning the chunk size
+// and statement timeout.
+func TestMissListBatchRecordsSlowestChunk(t *testing.T) {
+	stubQueries(t, 2, nil, nil)
+	inner := runMissListQuery
+	runMissListQuery = func(ctx context.Context, db *sql.DB, ids []int64, seeds string, a, b time.Time, limit int) ([]string, error) {
+		if ids[0] == 3 {
+			time.Sleep(30 * time.Millisecond)
+		}
+		return inner(ctx, db, ids, seeds, a, b, limit)
+	}
+	res, ok, _ := missListBatch(newBatchSession(t), nil, idStrings(1, 6), time.Time{}, time.Time{})
+	if !ok || res.slowest < 30*time.Millisecond {
+		t.Errorf("ok=%v slowest=%v; want the 30ms chunk recorded", ok, res.slowest)
+	}
+}
+
+// The miss-list query raises statement_timeout for its own transaction only:
+// inside it the limit is missListStatementTimeout, and the connection keeps
+// asset-db's 60s afterwards. Needs HYPERMASS_TEST_POSTGRES_DSN.
+func TestMissListStatementTimeoutIsLocalToTheQuery(t *testing.T) {
+	dsn := os.Getenv("HYPERMASS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("HYPERMASS_TEST_POSTGRES_DSN not set")
+	}
+	repo, err := assetdb.New(postgres.Postgres, dsn)
+	if err != nil {
+		t.Fatalf("open PostgreSQL asset database: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	db := postgresSQL(&sweepTestSession{db: wrap(repo), cfg: config.NewConfig()})
+	if db == nil {
+		t.Fatal("no *sql.DB behind the guarded repository")
+	}
+	ctx := context.Background()
+
+	var before, inside, after string
+	if err := db.QueryRowContext(ctx, "SHOW statement_timeout").Scan(&before); err != nil {
+		t.Fatalf("SHOW before: %v", err)
+	}
+	// The write below must fail (read-only), which aborts the transaction, so
+	// withStatementTimeout's own result is not checked; the SHOW runs first.
+	_ = withStatementTimeout(ctx, db, missListStatementTimeout, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, "SHOW statement_timeout").Scan(&inside); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "CREATE TEMP TABLE should_not_exist (i int)"); err == nil {
+			t.Error("the transaction is not read-only")
+		}
+		return nil
+	})
+	if err := db.QueryRowContext(ctx, "SHOW statement_timeout").Scan(&after); err != nil {
+		t.Fatalf("SHOW after: %v", err)
+	}
+	if before != "1min" || inside != "90s" || after != "1min" {
+		t.Errorf("statement_timeout before=%q inside=%q after=%q; want 1min, 90s, 1min", before, inside, after)
+	}
+}

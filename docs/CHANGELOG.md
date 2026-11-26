@@ -61,9 +61,19 @@ and an ETC. *Why:* the old row could not show how far a requeue had got
 replaced by `CHANGE_ME` because the repository is public. *Why:* keep the
 operator's tooling with the code it drives (briefing §10.9).
 
-**This change — documentation.** `docs/HYPERMASS_BRIEFING.md` rewritten
-so every area of the fork gets equal weight, with a change-impact guide;
-this changelog created.
+**PR #36 (11-24) — documentation.** `docs/HYPERMASS_BRIEFING.md`
+rewritten so every area of the fork gets equal weight, with a
+change-impact guide; this changelog created.
+
+**PR #37 (11-26) — sweep query: 90 s statement timeout.** One 5,000-IP
+chunk of the session-end sweep's batched query passed asset-db's 60 s
+`statement_timeout` on a production-size database (29,054 Done IPs, 6
+chunks), so its 5,000 IPs went to the slow one-at-a-time walk. Each chunk
+now runs in a read-only transaction with `SET LOCAL statement_timeout`
+of 90 s, for that query only (the connection keeps 60 s; safe behind
+pgBouncer). The Go deadline stays 90 s. The summary log adds
+`slowest_chunk` for tuning. *Why:* seen on the dashboard as `requeue
+(walk)`; the operator chose 90 s (briefing §4.5).
 
 ---
 

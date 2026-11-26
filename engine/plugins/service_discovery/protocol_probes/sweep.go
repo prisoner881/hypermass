@@ -78,7 +78,8 @@ func SweepMissedIPs(s et.Session, d et.Dispatcher) {
 		misses, walk = res.misses, res.walk
 		log.Info("batch miss-list query",
 			"done_ips", len(ids), "misses", len(misses),
-			"failed_chunks", res.failedChunks, "walk_ips", len(walk))
+			"failed_chunks", res.failedChunks, "walk_ips", len(walk),
+			"slowest_chunk", res.slowest.Round(100*time.Millisecond).String())
 	} else {
 		walk = ids
 		log.Warn("batched miss-list query not available; checking every Done IP one at a time",

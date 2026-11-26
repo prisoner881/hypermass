@@ -376,7 +376,11 @@ terminated.
    (`sweepMaxResubmit`).
    - **Batched path:** one PostgreSQL query per 5,000 Done IPs (`missListSQL`:
      open ports, not probed, resolved from a name under a seed or runtime
-     scope domain). Chunked, indexed per-IP probes, 90 s per chunk.
+     scope domain). Chunked, indexed per-IP probes. Each chunk runs in a
+     read-only transaction that raises `statement_timeout` from asset-db's
+     60 s to 90 s with `SET LOCAL` (only for that query; a 5,000-IP chunk
+     passed 60 s on a production-size database). The summary line logs
+     `slowest_chunk`, for tuning.
    - **Walk:** each IP checked one at a time with several lookups. Used
      when the batch cannot run (SQLite), and for the IPs of a chunk whose
      query failed. After 3 failed chunks in a row the rest are walked.
@@ -1105,7 +1109,9 @@ around it. Facts every change must respect:
 - `FindEntitiesByContent` returns an **error**, not an empty list, when
   nothing matches.
 - The repository's `*sql.DB` has one connection and a 60 s
-  `statement_timeout`.
+  `statement_timeout`. To allow longer, raise it for one query only with
+  `SET LOCAL` inside a transaction, as the sweep does (4.5); never change
+  the connection's setting.
 
 ### 9.2 The write guard (`engine/sessions/write_guard.go`)
 
@@ -1653,6 +1659,7 @@ provider-ASN list (policy says no).
 | `sweepMaxResubmit` | 500 | `protocol_probes/sweep.go` | 4.5 |
 | `sweepIdleTimeout` / `sweepDrainWait` | 2 min / 15 min | `protocol_probes/sweep.go` | 4.5 |
 | `missListChunk` / `maxConsecutiveChunkFailures` | 5,000 / 3 | `protocol_probes/sweep_query.go` | 4.5 |
+| `missListStatementTimeout` / `missListQueryTimeout` | 90 s / 90 s | `protocol_probes/sweep_query.go` | 4.5 |
 | `ownedMinPrefixBits` | 16 | `support/owned_netblock.go` | 7.3 |
 | `ownedFillMaxBacklog` / `ownedFillCheckEvery` | 2,048 / 64 | `support/owned_netblock.go` | 7.3 |
 | `maxAnnouncedNetblocksForScope` | 500 | `horizontals` | 7.8 |

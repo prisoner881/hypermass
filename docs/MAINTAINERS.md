@@ -1734,8 +1734,8 @@ On Postgres the sweep uses one batch query per chunk of Done IPs
 `dns_record` edge from an FQDN under a seed domain. Every step is an index
 probe keyed by that IP, so the cost follows the number of Done IPs, not
 the size of the database. IDs go in chunks of `missListChunk` (5,000),
-each statement well inside asset-db's 60 s `statement_timeout`, and the
-loop stops at the requeue cap.
+each statement under a 90 s `statement_timeout` set with `SET LOCAL`
+(13.11), and the loop stops at the requeue cap.
 
 The first version joined seed domains to `fqdn` with
 `reverse_fqdn LIKE reverse(domain) || '.%'`. A pattern built from a column
@@ -1998,6 +1998,7 @@ after 40 (6.5).
 | `ownedMinPrefixBits` | 16 | `support/owned_netblock.go` |
 | `ambientAdmitMinPrefixBits` | 20 | `support/owned_netblock.go` |
 | `missListChunk` | 5000 Done IPs per statement | `protocol_probes/sweep_query.go` |
+| `missListStatementTimeout` | 90 s per chunk (asset-db's connection default is 60 s) | `protocol_probes/sweep_query.go` |
 | `fqdnOSINTFirst` / `fqdnOSINTLast` | 20 / 40 | `registry/osint_bypass.go` |
 | DNS attempts per query | 6 | `support/resolvers.go` |
 | `lookupFailureInterval` | 1 minute per plugin | `support/lookup.go` |
@@ -2509,6 +2510,17 @@ failures, the whole sweep on SQLite and with a stubbed batch) and
 when `HYPERMASS_TEST_POSTGRES_DSN` names a scratch database
 (`postgres://user:pass@host:5432/dbname`, no query string; asset-db
 creates its schema there).
+
+**Statement timeout (PR #37).** On a production-size database one
+5,000-IP chunk passed asset-db's 60 s `statement_timeout`, and its IPs
+were walked. Each chunk now runs in a read-only transaction that sets
+`SET LOCAL statement_timeout = 90000`: the limit applies to that query
+only, the connection keeps 60 s afterwards, and it is safe under
+pgBouncer's transaction pooling (9.5). The Go deadline is also 90 s, so a
+chunk that runs too long ends as either error; both fail the chunk the
+same way. The summary line adds `slowest_chunk`, and a failed chunk logs
+`after`. `TestMissListStatementTimeoutIsLocalToTheQuery` checks the
+setting inside and after the transaction on PostgreSQL.
 
 **Dashboard:** `utility/dashboard.py` labels the row `requeue (batch)` when
 `candidates` ≤ 500 and `requeue (walk)` otherwise.

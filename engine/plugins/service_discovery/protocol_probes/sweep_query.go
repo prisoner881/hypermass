@@ -74,15 +74,29 @@ LIMIT $5
 `
 
 // missListChunk is how many Done IPs go into one miss-list statement. Each
-// statement must finish inside asset-db's 60s statement_timeout even with a
-// cold cache (about 1ms per IP in the worst case measured).
+// statement must finish inside missListStatementTimeout even with a cold
+// cache (about 1ms per IP in the worst case measured on a test database).
 var missListChunk = 5000
+
+// missListStatementTimeout is the PostgreSQL statement_timeout for one
+// miss-list chunk. asset-db opens its *sql.DB with a 60s statement_timeout,
+// which a 5,000-IP chunk exceeded on a production-size database. The query
+// raises it for its own statement only, with SET LOCAL inside a read-only
+// transaction, so the connection's default is unchanged for anything else
+// (and SET LOCAL is safe behind a transaction-pooling pgBouncer).
+const missListStatementTimeout = 90 * time.Second
+
+// missListQueryTimeout bounds a chunk on the Go side. It equals the statement
+// timeout, so a chunk that runs too long may end as either a PostgreSQL
+// "canceling statement due to statement timeout" or a Go "context deadline
+// exceeded"; both fail the chunk the same way.
+const missListQueryTimeout = 90 * time.Second
 
 // maxConsecutiveChunkFailures is how many miss-list chunks in a row may fail
 // before the batch gives up and leaves the remaining Done IPs to the serial
-// walk. Each failure can take up to 90 seconds, so a query that cannot work
-// at all (a schema or permission problem) should not be retried on every
-// chunk.
+// walk. Each failure can take up to missListQueryTimeout, so a query that
+// cannot work at all (a schema or permission problem) should not be retried
+// on every chunk.
 const maxConsecutiveChunkFailures = 3
 
 // runMissListQuery runs one miss-list chunk. Tests replace it.
@@ -129,6 +143,9 @@ type missListResult struct {
 	walk []string
 	// failedChunks counts the chunks whose query failed.
 	failedChunks int
+	// slowest is the longest any chunk's query took, failed or not, for
+	// tuning missListStatementTimeout and missListChunk.
+	slowest time.Duration
 }
 
 // missListBatch finds the Done IPs that need a Protocol-Probes requeue with
@@ -175,8 +192,11 @@ func missListBatch(s et.Session, log *slog.Logger, doneIDs []string, prefilterSi
 			break
 		}
 		end := min(start+missListChunk, len(ints))
+		began := time.Now()
 		found, qerr := runMissListQuery(s.Ctx(), db, ints[start:end], seedList,
 			prefilterSince, protoSince, sweepMaxResubmit-len(res.misses))
+		took := time.Since(began)
+		res.slowest = max(res.slowest, took)
 		if qerr == nil {
 			consecutive = 0
 			res.misses = append(res.misses, found...)
@@ -188,7 +208,8 @@ func missListBatch(s et.Session, log *slog.Logger, doneIDs []string, prefilterSi
 		res.walk = appendIDStrings(res.walk, ints[start:end])
 		if log != nil {
 			log.Warn("miss-list query failed for a chunk; its IPs will be checked one at a time",
-				"chunk", start/missListChunk+1, "chunks", chunks, "ips", end-start, "error", qerr.Error())
+				"chunk", start/missListChunk+1, "chunks", chunks, "ips", end-start,
+				"after", took.Round(100*time.Millisecond).String(), "error", qerr.Error())
 		}
 		if consecutive >= maxConsecutiveChunkFailures {
 			res.walk = appendIDStrings(res.walk, ints[end:])
@@ -209,34 +230,58 @@ func appendIDStrings(dst []string, ids []int64) []string {
 	return dst
 }
 
-// missListQuery runs missListSQL over one chunk of Done IPs.
+// missListQuery runs missListSQL over one chunk of Done IPs, under
+// missListStatementTimeout.
 func missListQuery(ctx context.Context, db *sql.DB, ids []int64, seeds string, prefilterSince, protoSince time.Time, limit int) ([]string, error) {
-	// 90s is past asset-db's 60s statement_timeout on this *sql.DB so
-	// a stuck SELECT surfaces as a Postgres error, not a Go race.
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, missListQueryTimeout)
 	defer cancel()
 
-	rows, err := db.QueryContext(ctx, missListSQL,
-		pgInt8Array(ids),
-		seeds,
-		prefilterSince.UTC(),
-		protoSince.UTC(),
-		limit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("miss-list query: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
 	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+	err := withStatementTimeout(ctx, db, missListStatementTimeout, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, missListSQL,
+			pgInt8Array(ids),
+			seeds,
+			prefilterSince.UTC(),
+			protoSince.UTC(),
+			limit,
+		)
+		if err != nil {
+			return fmt.Errorf("miss-list query: %w", err)
 		}
-		out = append(out, id)
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			out = append(out, id)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return out, nil
+}
+
+// withStatementTimeout runs fn in a read-only transaction whose
+// statement_timeout is timeout. SET LOCAL ends with the transaction, so the
+// connection keeps asset-db's own setting afterwards.
+func withStatementTimeout(ctx context.Context, db *sql.DB, timeout time.Duration, fn func(*sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("miss-list query: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", timeout.Milliseconds())); err != nil {
+		return fmt.Errorf("miss-list query: set statement_timeout: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func pgInt8Array(ids []int64) string {
